@@ -51,6 +51,10 @@
     box-sizing: border-box;
 }
 
+html {
+    font-size: clamp(14px, calc(0.7vw + 0.6rem), 16px);
+}
+
 body {
     margin: 0;
     min-height: 100vh;
@@ -60,9 +64,9 @@ body {
 }
 
 .app {
-    width: 100%;
-    margin: 0;
-    padding: 24px 16px 32px;
+    width: min(1200px, calc(100vw - 32px));
+    margin: 0 auto;
+    padding: clamp(16px, 3vw, 32px);
 }
 
 .app-branding {
@@ -72,7 +76,7 @@ body {
 
 .brand-logo {
     font-family: "CPPeriod", "Noto Sans JP", system-ui, sans-serif;
-    font-size: 2.9rem;
+    font-size: clamp(2.3rem, 4vw, 3rem);
     letter-spacing: 0.08em;
     color: var(--color-text);
     text-align: center;
@@ -311,8 +315,8 @@ body {
 
 .main-layout {
     display: grid;
-    grid-template-columns: 280px minmax(0, 1fr) 336px;
-    gap: 16px;
+    grid-template-columns: clamp(240px, 24vw, 280px) minmax(0, 1fr) clamp(260px, 26vw, 336px);
+    gap: clamp(12px, 2vw, 20px);
 }
 
 .panel {
@@ -620,7 +624,7 @@ body {
 }
 
 .co-table {
-    width: auto;
+    width: 100%;
     border-collapse: collapse;
     table-layout: fixed;
     background: var(--color-panel);
@@ -876,14 +880,14 @@ body {
 }
 .co-table th:first-child {
     text-align: left;
-    width: 300px;
-    min-width: 300px;
+    width: clamp(220px, 26vw, 320px);
+    min-width: 200px;
 }
 
 .co-table th:not(:first-child),
 .co-table td:not(:first-child) {
-    width: 170px;
-    min-width: 170px;
+    width: clamp(140px, 18vw, 200px);
+    min-width: 140px;
 }
 
 .voting-item {
