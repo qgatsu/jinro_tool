@@ -60,8 +60,8 @@ body {
 }
 
 .app {
-    width: 100%;
-    margin: 0;
+    width: min(1200px, 100%);
+    margin: 0 auto;
     padding: 24px 16px 32px;
 }
 
@@ -311,7 +311,10 @@ body {
 
 .main-layout {
     display: grid;
-    grid-template-columns: 280px minmax(0, 1fr) 336px;
+    grid-template-columns:
+        clamp(240px, 24vw, 280px)
+        minmax(0, 1fr)
+        clamp(260px, 28vw, 336px);
     gap: 16px;
 }
 
@@ -874,16 +877,17 @@ body {
     justify-content: flex-start;
     padding-left: 24px;
 }
-.co-table th:first-child {
+.co-table th:first-child,
+.co-table td:first-child {
     text-align: left;
-    width: 300px;
-    min-width: 300px;
+    width: clamp(200px, 26vw, 320px);
+    min-width: clamp(200px, 26vw, 320px);
 }
 
 .co-table th:not(:first-child),
 .co-table td:not(:first-child) {
-    width: 170px;
-    min-width: 170px;
+    width: clamp(120px, 18vw, 170px);
+    min-width: clamp(120px, 18vw, 170px);
 }
 
 .voting-item {
