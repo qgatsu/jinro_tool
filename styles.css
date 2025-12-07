@@ -52,7 +52,7 @@
 }
 
 html {
-    font-size: clamp(15px, 0.95vw + 0.45rem, 17px);
+    font-size: clamp(13px, 0.8vw + 0.4rem, 17px);
 }
 
 body {
@@ -78,7 +78,7 @@ body {
 
 .brand-logo {
     font-family: "CPPeriod", "Noto Sans JP", system-ui, sans-serif;
-    font-size: clamp(2.1rem, 4vw, 3.1rem);
+    font-size: clamp(1.8rem, 3.6vw, 3.1rem);
     letter-spacing: 0.08em;
     color: var(--color-text);
     text-align: center;
@@ -318,9 +318,9 @@ body {
 .main-layout {
     display: grid;
     grid-template-columns:
-        clamp(240px, 24vw, 280px)
+        clamp(220px, 22vw, 280px)
         minmax(0, 1fr)
-        clamp(260px, 28vw, 336px);
+        clamp(220px, 26vw, 320px);
     gap: 16px;
 }
 
@@ -891,14 +891,14 @@ body {
 .co-table th:first-child,
 .co-table td:first-child {
     text-align: left;
-    width: clamp(200px, 26vw, 320px);
-    min-width: clamp(200px, 26vw, 320px);
+    width: clamp(160px, 24vw, 320px);
+    min-width: clamp(160px, 24vw, 320px);
 }
 
 .co-table th:not(:first-child),
 .co-table td:not(:first-child) {
-    width: clamp(120px, 18vw, 170px);
-    min-width: clamp(120px, 18vw, 170px);
+    width: clamp(100px, 15vw, 170px);
+    min-width: clamp(100px, 15vw, 170px);
 }
 
 .voting-item {
