@@ -1,8 +1,8 @@
 name: Deploy jinro_tool to Lightsail
 
 on:
-  push:
-    branches: [ main ]  # ← デフォルトブランチが main じゃない場合はここを合わせる
+  push: {}
+  workflow_dispatch:
 
 jobs:
   deploy:
