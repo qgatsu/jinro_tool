@@ -51,23 +51,17 @@
     box-sizing: border-box;
 }
 
-html {
-    font-size: clamp(8px, 0.8vw + 0.4rem, 17px);
-}
-
 body {
     margin: 0;
     min-height: 100vh;
     background-color: var(--color-bg);
     color: var(--color-text);
-    font-size: 1rem;
-    line-height: 1.6;
     transition: background-color 0.2s ease, color 0.2s ease;
 }
 
 .app {
-    width: min(1200px, 100%);
-    margin: 0 auto;
+    width: 100%;
+    margin: 0;
     padding: 24px 16px 32px;
 }
 
@@ -78,7 +72,7 @@ body {
 
 .brand-logo {
     font-family: "CPPeriod", "Noto Sans JP", system-ui, sans-serif;
-    font-size: clamp(1.1rem, 3.8vw, 3.3rem);
+    font-size: 2.9rem;
     letter-spacing: 0.08em;
     color: var(--color-text);
     text-align: center;
@@ -317,10 +311,7 @@ body {
 
 .main-layout {
     display: grid;
-    grid-template-columns:
-        clamp(220px, 22vw, 280px)
-        minmax(0, 1fr)
-        clamp(220px, 26vw, 320px);
+    grid-template-columns: 280px minmax(0, 1fr) 336px;
     gap: 16px;
 }
 
@@ -348,11 +339,6 @@ body {
     justify-content: space-between;
     align-items: center;
     margin-bottom: 12px;
-}
-
-.panel-header h2 {
-    margin: 0;
-    font-size: clamp(1.1rem, 1.8vw, 1.4rem);
 }
 
 .count {
@@ -525,7 +511,7 @@ body {
 
 .modal-header h3 {
     margin: 0;
-    font-size: clamp(1.05rem, 1.7vw, 1.35rem);
+    font-size: 1.35rem;
 }
 
 .modal-close {
@@ -607,7 +593,7 @@ body {
 
 .help-section h4 {
     margin: 0 0 4px;
-    font-size: clamp(1rem, 1.5vw, 1.15rem);
+    font-size: 1.15rem;
     color: var(--color-secondary-text);
 }
 
@@ -888,17 +874,16 @@ body {
     justify-content: flex-start;
     padding-left: 24px;
 }
-.co-table th:first-child,
-.co-table td:first-child {
+.co-table th:first-child {
     text-align: left;
-    width: clamp(150px, 24vw, 320px);
-    min-width: clamp(150px, 24vw, 320px);
+    width: 300px;
+    min-width: 300px;
 }
 
 .co-table th:not(:first-child),
 .co-table td:not(:first-child) {
-    width: clamp(150px, 15vw, 170px);
-    min-width: clamp(150px, 15vw, 170px);
+    width: 170px;
+    min-width: 170px;
 }
 
 .voting-item {
