@@ -78,7 +78,7 @@ body {
 
 .brand-logo {
     font-family: "CPPeriod", "Noto Sans JP", system-ui, sans-serif;
-    font-size: clamp(1rem, 3.6vw, 3.1rem);
+    font-size: clamp(1.1rem, 3.8vw, 3.3rem);
     letter-spacing: 0.08em;
     color: var(--color-text);
     text-align: center;
