@@ -4,6 +4,7 @@ FROM nginx:1.27-alpine
 COPY index.html /usr/share/nginx/html/
 COPY help-content.html /usr/share/nginx/html/
 COPY styles.css /usr/share/nginx/html/
+COPY src/ /usr/share/nginx/html/src/
 COPY main.js /usr/share/nginx/html/
 COPY fonts/ /usr/share/nginx/html/fonts/
 COPY images/ /usr/share/nginx/html/images/
