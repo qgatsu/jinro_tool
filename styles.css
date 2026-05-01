@@ -1116,17 +1116,20 @@ body {
     display: flex;
     flex-direction: column;
     gap: 4px;
+    border: none;
+    margin: 0;
+    padding: 0;
     align-self: start;
 }
 
 .scale-day-tab {
-    padding: clamp(4px, 0.7vw, 6px) clamp(8px, 1.4vw, 14px);
+    padding: clamp(4px, 0.75vw, 7px) clamp(9px, 1.5vw, 15px);
     border: 1px solid var(--color-border-strong);
     border-radius: 5px;
     background: var(--color-neutral-bg);
     cursor: pointer;
     font-weight: 600;
-    font-size: clamp(0.7rem, 0.9vw, 0.85rem);
+    font-size: clamp(0.74rem, 0.95vw, 0.88rem);
     color: var(--color-secondary-text);
     text-align: left;
     white-space: nowrap;
