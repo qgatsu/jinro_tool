@@ -1010,7 +1010,7 @@ body {
 
 
 .voting-summary-scroll {
-    max-height: clamp(180px, 32vh, 360px);
+    max-height: clamp(270px, 41vh, 450px);
     overflow-y: auto;
     border: 1px solid var(--color-border);
     border-radius: 5px;

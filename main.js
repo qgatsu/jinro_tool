@@ -15,7 +15,7 @@ import {
     playerScales,
     THEME_STORAGE_KEY,
     HELP_CONTENT_PATH,
-} from "./src/state.js?v=20260502-2";
+} from "./src/state.js?v=20260502-3";
 
 const playerListEl = document.getElementById("playersList");
 const playerForm = document.getElementById("playerForm");
@@ -1355,6 +1355,9 @@ function updateVotingControls() {
     redoVoteBtn.disabled = votingFuture.length === 0;
 }
 
+let lastSummaryDay = null;
+let lastSummaryCount = 0;
+
 function renderVotingSummary(dayVotes) {
     const summary = document.createElement("div");
     summary.className = "voting-summary";
@@ -1376,6 +1379,15 @@ function renderVotingSummary(dayVotes) {
 
     const tbody = document.createElement("tbody");
     const entries = Object.entries(dayVotes);
+
+    const currentDay = cursors.activeVotingDay;
+    const shouldScrollToBottom =
+        currentDay !== null &&
+        currentDay === lastSummaryDay &&
+        entries.length > lastSummaryCount;
+    lastSummaryDay = currentDay;
+    lastSummaryCount = entries.length;
+
     if (entries.length === 0) {
         const row = document.createElement("tr");
         const cell = document.createElement("td");
@@ -1412,6 +1424,13 @@ function renderVotingSummary(dayVotes) {
     table.appendChild(tbody);
     tableWrap.appendChild(table);
     summary.appendChild(tableWrap);
+
+    if (shouldScrollToBottom) {
+        requestAnimationFrame(() => {
+            tableWrap.scrollTop = tableWrap.scrollHeight;
+        });
+    }
+
     return summary;
 }
 
