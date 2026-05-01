@@ -15,7 +15,7 @@ import {
     playerScales,
     THEME_STORAGE_KEY,
     HELP_CONTENT_PATH,
-} from "./src/state.js";
+} from "./src/state.js?v=20260502-2";
 
 const playerListEl = document.getElementById("playersList");
 const playerForm = document.getElementById("playerForm");
