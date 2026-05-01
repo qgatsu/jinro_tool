@@ -15,7 +15,7 @@ import {
     playerScales,
     THEME_STORAGE_KEY,
     HELP_CONTENT_PATH,
-} from "./src/state.js?v=20260502-7";
+} from "./src/state.js?v=20260502-8";
 
 const playerListEl = document.getElementById("playersList");
 const playerForm = document.getElementById("playerForm");
@@ -893,6 +893,9 @@ function renderScaleList() {
 
         const row = document.createElement("div");
         row.className = "scale-row";
+        if (isAfterDeath(name, day)) {
+            row.classList.add("dead");
+        }
 
         const thumb = document.createElement("button");
         thumb.type = "button";
@@ -1320,6 +1323,9 @@ function createVotingItem(name, side, dayVotes) {
     if (side === "voter") {
         item.classList.add("voting-item-left");
     }
+    if (cursors.activeVotingDay && isAfterDeath(name, cursors.activeVotingDay)) {
+        item.classList.add("dead");
+    }
 
     const dot = document.createElement("span");
     dot.className = "vote-dot";
@@ -1516,6 +1522,12 @@ function renderVotingSummary(dayVotes) {
 
         entries.forEach(([voter, target]) => {
             const row = document.createElement("tr");
+            if (
+                currentDay &&
+                (isAfterDeath(voter, currentDay) || isAfterDeath(target, currentDay))
+            ) {
+                row.classList.add("dead");
+            }
             const voterCell = document.createElement("td");
             voterCell.textContent = voter;
             const targetCell = document.createElement("td");

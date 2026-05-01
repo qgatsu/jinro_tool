@@ -1037,6 +1037,20 @@ body {
     z-index: 1;
 }
 
+.voting-item.dead {
+    opacity: 0.45;
+}
+
+.voting-summary-table tbody tr.dead td {
+    opacity: 0.5;
+    color: var(--color-muted-strong);
+}
+
+.scale-row.dead .scale-thumb {
+    opacity: 0.45;
+    filter: saturate(0.6);
+}
+
 .role-cell-menu {
     cursor: pointer;
 }
