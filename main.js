@@ -15,7 +15,7 @@ import {
     playerScales,
     THEME_STORAGE_KEY,
     HELP_CONTENT_PATH,
-} from "./src/state.js?v=20260502-3";
+} from "./src/state.js?v=20260502-5";
 
 const playerListEl = document.getElementById("playersList");
 const playerForm = document.getElementById("playerForm");
@@ -115,6 +115,7 @@ function renderPlayers() {
     }
 
     renderCOTable();
+    renderScaleDayTabs();
     renderScaleList();
 }
 
@@ -267,6 +268,7 @@ function renderCOTable() {
     coTableEl.appendChild(tbody);
 
     renderVotingTabs();
+    renderScaleDayTabs();
 }
 
 playerForm.addEventListener("submit", (event) => {
@@ -279,7 +281,7 @@ playerForm.addEventListener("submit", (event) => {
     }
 
     players.push({ name });
-    playerScales[name] = 0.5;
+    addPlayerToAllScales(name);
     playerForm.reset();
     renderPlayers();
 });
@@ -543,7 +545,7 @@ function handleBulkAdd() {
             return;
         }
         players.push({ name });
-        playerScales[name] = 0.5;
+        addPlayerToAllScales(name);
         existing.add(name);
         added.push(name);
     });
@@ -587,7 +589,7 @@ function deletePlayer(index) {
 
     players.splice(index, 1);
     removeSelectionsFor(target.name);
-    delete playerScales[target.name];
+    removePlayerFromAllScales(target.name);
     if (cursors.editingPlayerIndex === index) {
         cursors.editingPlayerIndex = null;
     } else if (cursors.editingPlayerIndex !== null && cursors.editingPlayerIndex > index) {
@@ -674,10 +676,7 @@ function finishEditingPlayer(index, newName, originalName) {
     }
 
     renameSelections(originalName, newName);
-    if (originalName in playerScales) {
-        playerScales[newName] = playerScales[originalName];
-        delete playerScales[originalName];
-    }
+    renamePlayerInAllScales(originalName, newName);
     players[index].name = newName;
     cursors.editingPlayerIndex = null;
     renderPlayers();
@@ -692,9 +691,87 @@ function applyThumbContrast(thumb, value) {
     thumb.classList.toggle("on-dark", value > 0.5);
 }
 
+function ensureScaleDay(day) {
+    if (!day) return null;
+    if (!playerScales[day]) {
+        playerScales[day] = {};
+    }
+    return playerScales[day];
+}
+
+function getPopulatedScaleDays() {
+    return days.filter((day) => Boolean(playerScales[day]));
+}
+
+function getActiveScaleDay(populatedDays) {
+    const list = populatedDays || getPopulatedScaleDays();
+    if (!cursors.activeScaleDay || !list.includes(cursors.activeScaleDay)) {
+        cursors.activeScaleDay = list[list.length - 1] || null;
+    }
+    return cursors.activeScaleDay;
+}
+
+function getScaleValue(day, name) {
+    return playerScales[day]?.[name];
+}
+
+function setScaleValue(day, name, value) {
+    const scope = ensureScaleDay(day);
+    if (!scope) return;
+    scope[name] = value;
+}
+
+function ensureScaleDayPopulated(dayLabel) {
+    if (!dayLabel || playerScales[dayLabel]) return;
+    const dayIndex = days.indexOf(dayLabel);
+    let sourceDay = null;
+    if (dayIndex !== -1) {
+        for (let i = dayIndex - 1; i >= 0; i--) {
+            if (playerScales[days[i]]) {
+                sourceDay = days[i];
+                break;
+            }
+        }
+    }
+    if (sourceDay) {
+        playerScales[dayLabel] = { ...playerScales[sourceDay] };
+    } else {
+        playerScales[dayLabel] = {};
+    }
+    players.forEach(({ name }) => {
+        if (!(name in playerScales[dayLabel])) {
+            playerScales[dayLabel][name] = 0.5;
+        }
+    });
+}
+
+function addPlayerToAllScales(name, value = 0.5) {
+    Object.keys(playerScales).forEach((day) => {
+        if (!(name in playerScales[day])) {
+            playerScales[day][name] = value;
+        }
+    });
+}
+
+function removePlayerFromAllScales(name) {
+    Object.keys(playerScales).forEach((day) => {
+        delete playerScales[day][name];
+    });
+}
+
+function renamePlayerInAllScales(oldName, newName) {
+    Object.keys(playerScales).forEach((day) => {
+        if (oldName in playerScales[day]) {
+            playerScales[day][newName] = playerScales[day][oldName];
+            delete playerScales[day][oldName];
+        }
+    });
+}
+
 function setThumbValue(thumb, name, value) {
     const v = clampScale(value);
-    playerScales[name] = v;
+    const day = getActiveScaleDay();
+    setScaleValue(day, name, v);
     thumb.style.setProperty("--scale-pos", `${v * 100}%`);
     thumb.setAttribute("aria-valuenow", v.toFixed(2));
     thumb.title = `${name}: ${v.toFixed(2)}`;
@@ -735,7 +812,8 @@ function attachScaleThumbInteractions(thumb, row, name) {
     thumb.addEventListener("pointercancel", releasePointer);
 
     thumb.addEventListener("keydown", (event) => {
-        const current = clampScale(playerScales[name] ?? 0.5);
+        const day = getActiveScaleDay();
+        const current = clampScale(getScaleValue(day, name) ?? 0.5);
         const step = event.shiftKey ? 0.1 : 0.05;
         let next = current;
         switch (event.key) {
@@ -761,21 +839,56 @@ function attachScaleThumbInteractions(thumb, row, name) {
     });
 }
 
+function renderScaleDayTabs() {
+    const tabsEl = document.getElementById("scaleDayTabs");
+    if (!tabsEl) return;
+    tabsEl.innerHTML = "";
+    const populatedDays = getPopulatedScaleDays();
+    const activeDay = getActiveScaleDay(populatedDays);
+    populatedDays.forEach((day) => {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "scale-day-tab";
+        btn.textContent = `${day}夜`;
+        btn.dataset.scaleDay = day;
+        if (day === activeDay) {
+            btn.classList.add("active");
+        }
+        btn.addEventListener("click", () => {
+            cursors.activeScaleDay = day;
+            renderScaleDayTabs();
+            renderScaleList();
+        });
+        tabsEl.appendChild(btn);
+    });
+}
+
 function renderScaleList() {
     const list = document.getElementById("scaleList");
     if (!list) {
         return;
     }
+    const populatedDays = getPopulatedScaleDays();
+    const day = getActiveScaleDay(populatedDays);
     if (players.length === 0) {
         list.classList.add("empty");
         list.innerHTML = '<p class="scale-empty">プレイヤーが登録されていません。</p>';
         return;
     }
+    if (!day) {
+        list.classList.add("empty");
+        list.innerHTML = '<p class="scale-empty">CO 表に値を入力するとスケールが作成されます。</p>';
+        return;
+    }
     list.classList.remove("empty");
     list.innerHTML = "";
     players.forEach(({ name }) => {
-        const value = clampScale(playerScales[name] ?? 0.5);
-        playerScales[name] = value;
+        let stored = getScaleValue(day, name);
+        if (stored === undefined) {
+            stored = 0.5;
+            setScaleValue(day, name, stored);
+        }
+        const value = clampScale(stored);
 
         const row = document.createElement("div");
         row.className = "scale-row";
@@ -788,7 +901,7 @@ function renderScaleList() {
         thumb.setAttribute("role", "slider");
         thumb.setAttribute("aria-valuemin", "0");
         thumb.setAttribute("aria-valuemax", "1");
-        thumb.setAttribute("aria-label", `${name} の怪しさ`);
+        thumb.setAttribute("aria-label", `${name} の怪しさ (${day}夜)`);
         thumb.style.setProperty("--scale-pos", `${value * 100}%`);
         thumb.setAttribute("aria-valuenow", value.toFixed(2));
         thumb.title = `${name}: ${value.toFixed(2)}`;
@@ -817,6 +930,7 @@ function attachCoTabHandlers() {
                 p.hidden = p.dataset.coTab !== target;
             });
             if (target === "scale") {
+                renderScaleDayTabs();
                 renderScaleList();
             } else if (target === "voting") {
                 renderVotingTabs();
@@ -887,6 +1001,7 @@ function handleSelectionChange(role, dayLabel, value) {
     const previous = coSelections[key];
     if (value) {
         coSelections[key] = value;
+        ensureScaleDayPopulated(dayLabel);
     } else {
         delete coSelections[key];
     }

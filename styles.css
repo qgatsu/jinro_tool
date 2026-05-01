@@ -1105,6 +1105,31 @@ body {
     display: none;
 }
 
+.scale-day-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-bottom: 8px;
+}
+
+.scale-day-tab {
+    padding: clamp(3px, 0.55vw, 5px) clamp(7px, 1.1vw, 11px);
+    border: 1px solid var(--color-border-strong);
+    border-radius: 5px;
+    background: var(--color-neutral-bg);
+    cursor: pointer;
+    font-weight: 600;
+    font-size: clamp(0.66rem, 0.85vw, 0.78rem);
+    color: var(--color-secondary-text);
+    transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.scale-day-tab.active {
+    background: var(--color-primary);
+    border-color: var(--color-primary);
+    color: var(--color-primary-contrast);
+}
+
 .scale-list {
     display: flex;
     flex-direction: column;

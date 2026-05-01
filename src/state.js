@@ -28,6 +28,7 @@ export const cursors = {
     pendingVoter: null,
     editingPlayerIndex: null,
     activeCoTab: "voting",
+    activeScaleDay: null,
 };
 
 export const THEME_STORAGE_KEY = "jinro-tools-theme";
