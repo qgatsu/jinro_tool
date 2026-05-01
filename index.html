@@ -64,23 +64,34 @@
                 </form>
             </section>
             <section class="panel co-panel">
-                <div class="panel-header co-header">
-                    <h2>CO表</h2>
-                    <button type="button" id="addRoleBtn" class="role-add-inline">役職を追加</button>
-                </div>
                 <div class="co-table-wrapper">
                     <table class="co-table" id="coTable"></table>
                 </div>
-                <div class="voting-panel">
-                    <div class="panel-header">
-                        <h2>投票管理ツール</h2>
+                <div class="role-add-zone">
+                    <button type="button" id="addRoleBtn" class="role-add-plus" aria-label="役職を追加" title="役職を追加">+</button>
+                </div>
+                <div class="co-tabs" role="tablist">
+                    <button type="button" class="co-tab active" data-co-tab="voting" role="tab" aria-selected="true">投票管理</button>
+                    <button type="button" class="co-tab" data-co-tab="scale" role="tab" aria-selected="false">スケール</button>
+                </div>
+                <div class="co-tab-panel" data-co-tab="voting" role="tabpanel">
+                    <div class="voting-panel">
+                        <div class="voting-layout-wrap">
+                            <div class="voting-tabs" id="votingTabs"></div>
+                            <div class="voting-content-wrap">
+                                <div class="voting-controls">
+                                    <button type="button" id="undoVoteBtn" disabled>取り消し</button>
+                                    <button type="button" id="redoVoteBtn" disabled>やり直し</button>
+                                </div>
+                                <div class="voting-tab-content" id="votingContent"></div>
+                            </div>
+                        </div>
                     </div>
-                    <div class="voting-controls">
-                        <button type="button" id="undoVoteBtn" disabled>取り消し</button>
-                        <button type="button" id="redoVoteBtn" disabled>やり直し</button>
+                </div>
+                <div class="co-tab-panel" data-co-tab="scale" role="tabpanel" hidden>
+                    <div class="scale-list" id="scaleList">
+                        <p class="scale-empty">プレイヤーが登録されていません。</p>
                     </div>
-                    <div class="voting-tabs" id="votingTabs"></div>
-                    <div class="voting-tab-content" id="votingContent"></div>
                 </div>
             </section>
             <section class="panel memo-panel">
@@ -127,6 +138,6 @@
             </div>
         </div>
     </div>
-    <script src="main.js"></script>
+    <script type="module" src="main.js"></script>
 </body>
 </html>

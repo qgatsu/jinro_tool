@@ -1,19 +1,21 @@
-const players = [];
-const baseRoles = ["吊り", "噛み", "占い師", "霊能者", "騎士"];
-const days = ["1日目"];
-let nextDayIndex = 2;
-let nextRoleId = baseRoles.length;
-let roleRows = baseRoles.map((label, index) => ({ id: `role-${index}`, label }));
-const coSelections = {};
-const markerSelections = {};
-const roleAssignments = {};
-const deathRecords = {};
-let votingData = {};
-const votingHistory = [];
-let votingFuture = [];
-let activeVotingDay = null;
-let pendingVoter = null;
-let editingPlayerIndex = null;
+import {
+    players,
+    days,
+    roleRows,
+    coSelections,
+    markerSelections,
+    roleAssignments,
+    deathRecords,
+    votingHistory,
+    votingData,
+    votingFuture,
+    setVotingData,
+    setVotingFuture,
+    cursors,
+    playerScales,
+    THEME_STORAGE_KEY,
+    HELP_CONTENT_PATH,
+} from "./src/state.js";
 
 const playerListEl = document.getElementById("playersList");
 const playerForm = document.getElementById("playerForm");
@@ -41,8 +43,6 @@ const exportRolesInput = document.getElementById("exportRolesInput");
 const openExportModalBtn = document.getElementById("openExportModalBtn");
 const openHelpModalBtn = document.getElementById("openHelpModalBtn");
 const helpModalEl = document.getElementById("helpModal");
-const THEME_STORAGE_KEY = "jinro-tools-theme";
-const HELP_CONTENT_PATH = "help-content.html";
 
 function getKey(roleId, day) {
     return `${roleId}-${day}`;
@@ -61,7 +61,7 @@ function renderPlayers() {
         players.forEach((player, index) => {
             const item = document.createElement("li");
             item.className = "player-card";
-            if (editingPlayerIndex === index) {
+            if (cursors.editingPlayerIndex === index) {
                 item.classList.add("editing");
                 const input = document.createElement("input");
                 input.type = "text";
@@ -75,7 +75,7 @@ function renderPlayers() {
                     }
                 });
                 input.addEventListener("blur", () => {
-                    if (editingPlayerIndex === index) {
+                    if (cursors.editingPlayerIndex === index) {
                         cancelEditingPlayer();
                     }
                 });
@@ -115,6 +115,7 @@ function renderPlayers() {
     }
 
     renderCOTable();
+    renderScaleList();
 }
 
 function populateSelect(select, selected) {
@@ -278,6 +279,7 @@ playerForm.addEventListener("submit", (event) => {
     }
 
     players.push({ name });
+    playerScales[name] = 0.5;
     playerForm.reset();
     renderPlayers();
 });
@@ -541,6 +543,7 @@ function handleBulkAdd() {
             return;
         }
         players.push({ name });
+        playerScales[name] = 0.5;
         existing.add(name);
         added.push(name);
     });
@@ -584,10 +587,11 @@ function deletePlayer(index) {
 
     players.splice(index, 1);
     removeSelectionsFor(target.name);
-    if (editingPlayerIndex === index) {
-        editingPlayerIndex = null;
-    } else if (editingPlayerIndex !== null && editingPlayerIndex > index) {
-        editingPlayerIndex -= 1;
+    delete playerScales[target.name];
+    if (cursors.editingPlayerIndex === index) {
+        cursors.editingPlayerIndex = null;
+    } else if (cursors.editingPlayerIndex !== null && cursors.editingPlayerIndex > index) {
+        cursors.editingPlayerIndex -= 1;
     }
     renderPlayers();
 }
@@ -644,12 +648,12 @@ function removeSelectionsForRole(roleId) {
 }
 
 function startEditingPlayer(index) {
-    editingPlayerIndex = index;
+    cursors.editingPlayerIndex = index;
     renderPlayers();
 }
 
 function cancelEditingPlayer() {
-    editingPlayerIndex = null;
+    cursors.editingPlayerIndex = null;
     renderPlayers();
 }
 
@@ -670,9 +674,155 @@ function finishEditingPlayer(index, newName, originalName) {
     }
 
     renameSelections(originalName, newName);
+    if (originalName in playerScales) {
+        playerScales[newName] = playerScales[originalName];
+        delete playerScales[originalName];
+    }
     players[index].name = newName;
-    editingPlayerIndex = null;
+    cursors.editingPlayerIndex = null;
     renderPlayers();
+}
+
+function clampScale(v) {
+    if (Number.isNaN(v)) return 0.5;
+    return Math.max(0, Math.min(1, v));
+}
+
+function applyThumbContrast(thumb, value) {
+    thumb.classList.toggle("on-dark", value > 0.5);
+}
+
+function setThumbValue(thumb, name, value) {
+    const v = clampScale(value);
+    playerScales[name] = v;
+    thumb.style.setProperty("--scale-pos", `${v * 100}%`);
+    thumb.setAttribute("aria-valuenow", v.toFixed(2));
+    thumb.title = `${name}: ${v.toFixed(2)}`;
+    applyThumbContrast(thumb, v);
+}
+
+function attachScaleThumbInteractions(thumb, row, name) {
+    let dragging = false;
+
+    const updateFromClientX = (clientX) => {
+        const rect = row.getBoundingClientRect();
+        if (rect.width <= 0) return;
+        setThumbValue(thumb, name, (clientX - rect.left) / rect.width);
+    };
+
+    thumb.addEventListener("pointerdown", (event) => {
+        dragging = true;
+        thumb.setPointerCapture(event.pointerId);
+        thumb.classList.add("dragging");
+        thumb.focus();
+        event.preventDefault();
+    });
+
+    thumb.addEventListener("pointermove", (event) => {
+        if (!dragging) return;
+        updateFromClientX(event.clientX);
+    });
+
+    const releasePointer = (event) => {
+        if (!dragging) return;
+        dragging = false;
+        thumb.classList.remove("dragging");
+        try {
+            thumb.releasePointerCapture(event.pointerId);
+        } catch (_) {}
+    };
+    thumb.addEventListener("pointerup", releasePointer);
+    thumb.addEventListener("pointercancel", releasePointer);
+
+    thumb.addEventListener("keydown", (event) => {
+        const current = clampScale(playerScales[name] ?? 0.5);
+        const step = event.shiftKey ? 0.1 : 0.05;
+        let next = current;
+        switch (event.key) {
+            case "ArrowRight":
+            case "ArrowUp":
+                next = current + step;
+                break;
+            case "ArrowLeft":
+            case "ArrowDown":
+                next = current - step;
+                break;
+            case "Home":
+                next = 0;
+                break;
+            case "End":
+                next = 1;
+                break;
+            default:
+                return;
+        }
+        event.preventDefault();
+        setThumbValue(thumb, name, next);
+    });
+}
+
+function renderScaleList() {
+    const list = document.getElementById("scaleList");
+    if (!list) {
+        return;
+    }
+    if (players.length === 0) {
+        list.classList.add("empty");
+        list.innerHTML = '<p class="scale-empty">プレイヤーが登録されていません。</p>';
+        return;
+    }
+    list.classList.remove("empty");
+    list.innerHTML = "";
+    players.forEach(({ name }) => {
+        const value = clampScale(playerScales[name] ?? 0.5);
+        playerScales[name] = value;
+
+        const row = document.createElement("div");
+        row.className = "scale-row";
+
+        const thumb = document.createElement("button");
+        thumb.type = "button";
+        thumb.className = "scale-thumb";
+        thumb.textContent = name;
+        thumb.dataset.name = name;
+        thumb.setAttribute("role", "slider");
+        thumb.setAttribute("aria-valuemin", "0");
+        thumb.setAttribute("aria-valuemax", "1");
+        thumb.setAttribute("aria-label", `${name} の怪しさ`);
+        thumb.style.setProperty("--scale-pos", `${value * 100}%`);
+        thumb.setAttribute("aria-valuenow", value.toFixed(2));
+        thumb.title = `${name}: ${value.toFixed(2)}`;
+        applyThumbContrast(thumb, value);
+
+        attachScaleThumbInteractions(thumb, row, name);
+
+        row.appendChild(thumb);
+        list.appendChild(row);
+    });
+}
+
+function attachCoTabHandlers() {
+    const tabs = document.querySelectorAll(".co-tab");
+    const panels = document.querySelectorAll(".co-tab-panel");
+    tabs.forEach((btn) => {
+        btn.addEventListener("click", () => {
+            const target = btn.dataset.coTab;
+            cursors.activeCoTab = target;
+            tabs.forEach((b) => {
+                const isActive = b.dataset.coTab === target;
+                b.classList.toggle("active", isActive);
+                b.setAttribute("aria-selected", isActive ? "true" : "false");
+            });
+            panels.forEach((p) => {
+                p.hidden = p.dataset.coTab !== target;
+            });
+            if (target === "scale") {
+                renderScaleList();
+            } else if (target === "voting") {
+                renderVotingTabs();
+            }
+        });
+    });
 }
 
 function autoAddDayIfNeeded(dayLabel, value) {
@@ -691,9 +841,9 @@ function autoAddDayIfNeeded(dayLabel, value) {
 }
 
 function addNextDay() {
-    const label = `${nextDayIndex}日目`;
+    const label = `${cursors.nextDayIndex}日目`;
     days.push(label);
-    nextDayIndex += 1;
+    cursors.nextDayIndex += 1;
     renderCOTable();
 }
 
@@ -891,8 +1041,8 @@ function updateCellStyles(role, dayLabel, value) {
 
 function renderVotingTabs() {
     const availableDays = getVotingDays();
-    if (!activeVotingDay || !availableDays.includes(activeVotingDay)) {
-        activeVotingDay = availableDays[0] || null;
+    if (!cursors.activeVotingDay || !availableDays.includes(cursors.activeVotingDay)) {
+        cursors.activeVotingDay = availableDays[0] || null;
     }
 
     votingTabsEl.innerHTML = "";
@@ -901,12 +1051,12 @@ function renderVotingTabs() {
         const button = document.createElement("button");
         button.type = "button";
         button.className = "voting-tab";
-        if (day === activeVotingDay) {
+        if (day === cursors.activeVotingDay) {
             button.classList.add("active");
         }
         button.textContent = day;
         button.addEventListener("click", () => {
-            activeVotingDay = day;
+            cursors.activeVotingDay = day;
             renderVotingTabs();
         });
         votingTabsEl.appendChild(button);
@@ -918,7 +1068,7 @@ function renderVotingTabs() {
 function renderVotingContent() {
     votingContentEl.innerHTML = "";
 
-    if (!activeVotingDay) {
+    if (!cursors.activeVotingDay) {
         votingContentEl.textContent = "表示できる日がありません。";
         return;
     }
@@ -941,7 +1091,7 @@ function renderVotingContent() {
     rows.className = "voting-rows";
     rows.appendChild(createVotingColumnHeader());
 
-    const dayVotes = votingData[activeVotingDay] || {};
+    const dayVotes = votingData[cursors.activeVotingDay] || {};
 
     players.forEach((player) => {
         const row = document.createElement("div");
@@ -1063,7 +1213,7 @@ function createVotingItem(name, side, dayVotes) {
     dot.dataset.side = side;
 
     if (side === "voter") {
-        if (pendingVoter === name) {
+        if (cursors.pendingVoter === name) {
             dot.classList.add("pending");
         }
 
@@ -1091,17 +1241,17 @@ function createVotingItem(name, side, dayVotes) {
 }
 
 function handleVoterClick(name) {
-    if (pendingVoter === name) {
-        pendingVoter = null;
+    if (cursors.pendingVoter === name) {
+        cursors.pendingVoter = null;
     } else {
-        pendingVoter = name;
+        cursors.pendingVoter = name;
     }
 
     renderVotingContent();
 }
 
 function handleTargetClick(targetName) {
-    if (!pendingVoter) {
+    if (!cursors.pendingVoter) {
         const removed = applyVotingChange(() => removeVoteByTarget(targetName));
         if (removed) {
             renderVotingContent();
@@ -1110,35 +1260,35 @@ function handleTargetClick(targetName) {
     }
 
     const changed = applyVotingChange(() => {
-        if (!activeVotingDay) {
+        if (!cursors.activeVotingDay) {
             return false;
         }
 
-        if (!votingData[activeVotingDay]) {
-            votingData[activeVotingDay] = {};
+        if (!votingData[cursors.activeVotingDay]) {
+            votingData[cursors.activeVotingDay] = {};
         }
 
-        const dayVotes = votingData[activeVotingDay];
-        if (dayVotes[pendingVoter] === targetName) {
-            delete dayVotes[pendingVoter];
+        const dayVotes = votingData[cursors.activeVotingDay];
+        if (dayVotes[cursors.pendingVoter] === targetName) {
+            delete dayVotes[cursors.pendingVoter];
         } else {
-            dayVotes[pendingVoter] = targetName;
+            dayVotes[cursors.pendingVoter] = targetName;
         }
         return true;
     });
 
     if (changed) {
-        pendingVoter = null;
+        cursors.pendingVoter = null;
         renderVotingContent();
     }
 }
 
 function removeVoteByTarget(targetName) {
-    if (!activeVotingDay) {
+    if (!cursors.activeVotingDay) {
         return false;
     }
 
-    const dayVotes = votingData[activeVotingDay];
+    const dayVotes = votingData[cursors.activeVotingDay];
     if (!dayVotes) {
         return false;
     }
@@ -1169,7 +1319,7 @@ function applyVotingChange(mutator) {
     if (votingHistory.length > 100) {
         votingHistory.shift();
     }
-    votingFuture = [];
+    setVotingFuture([]);
     updateVotingControls();
     return true;
 }
@@ -1180,8 +1330,8 @@ function undoVotingChange() {
     }
 
     votingFuture.push(cloneVotingData());
-    votingData = votingHistory.pop();
-    pendingVoter = null;
+    setVotingData(votingHistory.pop());
+    cursors.pendingVoter = null;
     renderVotingTabs();
     updateVotingControls();
 }
@@ -1192,8 +1342,8 @@ function redoVotingChange() {
     }
 
     votingHistory.push(cloneVotingData());
-    votingData = votingFuture.pop();
-    pendingVoter = null;
+    setVotingData(votingFuture.pop());
+    cursors.pendingVoter = null;
     renderVotingTabs();
     updateVotingControls();
 }
@@ -1305,8 +1455,8 @@ function updateMarkerAppearance(button, color) {
 
 function addRoleRow(index) {
     const source = roleRows[index];
-    const newRole = { id: `role-${nextRoleId}`, label: source.label };
-    nextRoleId += 1;
+    const newRole = { id: `role-${cursors.nextRoleId}`, label: source.label };
+    cursors.nextRoleId += 1;
     roleRows.splice(index + 1, 0, newRole);
     renderCOTable();
     if (source.label === "霊能者") {
@@ -1343,8 +1493,8 @@ addRoleBtn.addEventListener("click", () => {
         return;
     }
 
-    const newRole = { id: `role-${nextRoleId}`, label };
-    nextRoleId += 1;
+    const newRole = { id: `role-${cursors.nextRoleId}`, label };
+    cursors.nextRoleId += 1;
     roleRows.push(newRole);
     renderCOTable();
 });
@@ -1359,6 +1509,7 @@ if (themeToggleBtn) {
 }
 
 initializeHelpModalContent();
+attachCoTabHandlers();
 updateVotingControls();
 renderPlayers();
 initializeThemePreference();
