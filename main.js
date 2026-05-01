@@ -15,7 +15,7 @@ import {
     playerScales,
     THEME_STORAGE_KEY,
     HELP_CONTENT_PATH,
-} from "./src/state.js?v=20260502-5";
+} from "./src/state.js?v=20260502-6";
 
 const playerListEl = document.getElementById("playersList");
 const playerForm = document.getElementById("playerForm");
@@ -743,6 +743,7 @@ function ensureScaleDayPopulated(dayLabel) {
             playerScales[dayLabel][name] = 0.5;
         }
     });
+    cursors.activeScaleDay = dayLabel;
 }
 
 function addPlayerToAllScales(name, value = 0.5) {

@@ -1105,22 +1105,31 @@ body {
     display: none;
 }
 
+.scale-layout-wrap {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 6px;
+    align-items: stretch;
+}
+
 .scale-day-tabs {
     display: flex;
-    flex-wrap: wrap;
+    flex-direction: column;
     gap: 4px;
-    margin-bottom: 8px;
+    align-self: start;
 }
 
 .scale-day-tab {
-    padding: clamp(3px, 0.55vw, 5px) clamp(7px, 1.1vw, 11px);
+    padding: clamp(4px, 0.7vw, 6px) clamp(8px, 1.4vw, 14px);
     border: 1px solid var(--color-border-strong);
     border-radius: 5px;
     background: var(--color-neutral-bg);
     cursor: pointer;
     font-weight: 600;
-    font-size: clamp(0.66rem, 0.85vw, 0.78rem);
+    font-size: clamp(0.7rem, 0.9vw, 0.85rem);
     color: var(--color-secondary-text);
+    text-align: left;
+    white-space: nowrap;
     transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
 }
 
