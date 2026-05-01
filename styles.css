@@ -1009,10 +1009,11 @@ body {
 }
 
 
-.voting-summary h3 {
-    margin-top: 0;
-    font-size: clamp(0.76rem, 0.92vw, 0.86rem);
-    color: var(--color-text);
+.voting-summary-scroll {
+    max-height: clamp(180px, 32vh, 360px);
+    overflow-y: auto;
+    border: 1px solid var(--color-border);
+    border-radius: 5px;
 }
 
 .voting-summary-table {
@@ -1031,6 +1032,9 @@ body {
 .voting-summary-table th {
     background: var(--color-table-head);
     font-weight: 600;
+    position: sticky;
+    top: 0;
+    z-index: 1;
 }
 
 .role-cell-menu {

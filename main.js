@@ -236,7 +236,7 @@ function renderCOTable() {
             const shouldDisable = shouldDisableCell(role, day);
             td.dataset.role = role.id;
             td.dataset.day = day;
-            if (shouldDisable && !coSelections[key]) {
+            if (shouldDisable) {
                 td.classList.add("disabled-cell");
             }
 
@@ -1030,9 +1030,7 @@ function updateCellStyles(role, dayLabel, value) {
         return;
     }
 
-    if (value) {
-        cell.classList.remove("disabled-cell");
-    } else if (shouldDisableCell(role, dayLabel)) {
+    if (shouldDisableCell(role, dayLabel)) {
         cell.classList.add("disabled-cell");
     } else {
         cell.classList.remove("disabled-cell");
@@ -1361,9 +1359,8 @@ function renderVotingSummary(dayVotes) {
     const summary = document.createElement("div");
     summary.className = "voting-summary";
 
-    const title = document.createElement("h3");
-    title.textContent = "投票一覧";
-    summary.appendChild(title);
+    const tableWrap = document.createElement("div");
+    tableWrap.className = "voting-summary-scroll";
 
     const table = document.createElement("table");
     table.className = "voting-summary-table";
@@ -1413,7 +1410,8 @@ function renderVotingSummary(dayVotes) {
 
     table.appendChild(thead);
     table.appendChild(tbody);
-    summary.appendChild(table);
+    tableWrap.appendChild(table);
+    summary.appendChild(tableWrap);
     return summary;
 }
 
