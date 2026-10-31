@@ -1,9 +1,6 @@
 name: Deploy jinro_tool to Lightsail
 
 on:
-  push:
-    branches:
-      - deploy
   workflow_dispatch:
 
 jobs:
