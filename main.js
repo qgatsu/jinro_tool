@@ -15,7 +15,11 @@ import {
     playerScales,
     THEME_STORAGE_KEY,
     HELP_CONTENT_PATH,
-} from "./src/state.js?v=20260502-8";
+    currentState,
+    restoreState,
+} from "./src/state.js?v=20261101-4";
+import { createPlayer, removePlayerReferences, canRecordDeath, reconcileDeathRecords, isDeadBeforeDay, setVote, deleteVote } from "./src/game.mjs?v=20261101-4";
+import { MATCHES_STORAGE_KEY, createArchive, createMatch, parseArchive } from "./src/matches.mjs?v=20261101-4";
 
 const playerListEl = document.getElementById("playersList");
 const playerForm = document.getElementById("playerForm");
@@ -32,6 +36,10 @@ const bulkSubmitBtn = document.getElementById("bulkSubmitBtn");
 const bulkInputEl = document.getElementById("bulkPlayersInput");
 const undoVoteBtn = document.getElementById("undoVoteBtn");
 const redoVoteBtn = document.getElementById("redoVoteBtn");
+const deleteVoteBtn = document.getElementById("deleteVoteBtn");
+let voteDrag = null;
+let voteResizeObserver;
+let voteEndpointController;
 const themeToggleBtn = document.getElementById("themeToggle");
 const memoTextarea = document.querySelector(".memo-textarea");
 const exportModalEl = document.getElementById("exportModal");
@@ -43,6 +51,16 @@ const exportRolesInput = document.getElementById("exportRolesInput");
 const openExportModalBtn = document.getElementById("openExportModalBtn");
 const openHelpModalBtn = document.getElementById("openHelpModalBtn");
 const helpModalEl = document.getElementById("helpModal");
+const matchSelect = document.getElementById("matchSelect");
+const newMatchBtn = document.getElementById("newMatchBtn");
+const saveStatus = document.getElementById("saveStatus");
+let matchArchive;
+let archiveWritable = true;
+let saveTimer;
+
+function playerName(id) {
+    return players.find((player) => player.id === id)?.name || "不明なプレイヤー";
+}
 
 function getKey(roleId, day) {
     return `${roleId}-${day}`;
@@ -69,8 +87,10 @@ function renderPlayers() {
                 input.className = "player-edit-input";
                 input.addEventListener("keydown", (event) => {
                     if (event.key === "Enter") {
+                        event.preventDefault();
                         finishEditingPlayer(index, input.value.trim(), player.name);
                     } else if (event.key === "Escape") {
+                        event.preventDefault();
                         cancelEditingPlayer();
                     }
                 });
@@ -93,6 +113,7 @@ function renderPlayers() {
                 deleteBtn.className = "delete-btn";
                 deleteBtn.setAttribute("aria-label", `${player.name} を削除`);
                 deleteBtn.textContent = "×";
+                deleteBtn.addEventListener("pointerdown", (event) => event.preventDefault());
                 deleteBtn.addEventListener("click", (event) => {
                     event.stopPropagation();
                     deletePlayer(index);
@@ -129,7 +150,7 @@ function populateSelect(select, selected) {
 
     players.forEach((player) => {
         const option = document.createElement("option");
-        option.value = player.name;
+        option.value = player.id;
         option.textContent = player.name;
         select.appendChild(option);
     });
@@ -229,12 +250,18 @@ function renderCOTable() {
             select.dataset.day = day;
             const key = getKey(role.id, day);
             populateSelect(select, coSelections[key]);
+            if (role.label === "吊り" || role.label === "噛み") {
+                for (const option of select.options) {
+                    option.disabled = !canRecordDeath(currentState(), role.id, day, option.value);
+                }
+            }
             select.addEventListener("change", (event) => {
                 handleSelectionChange(role, day, event.target.value);
             });
             cellWrapper.appendChild(select);
 
             const shouldDisable = shouldDisableCell(role, day);
+            select.disabled = shouldDisable;
             td.dataset.role = role.id;
             td.dataset.day = day;
             if (shouldDisable) {
@@ -246,6 +273,7 @@ function renderCOTable() {
                 const markerButton = document.createElement("button");
                 markerButton.type = "button";
                 markerButton.className = "marker-toggle";
+                markerButton.disabled = shouldDisable;
                 const current = markerSelections[markerKey] || "white";
                 updateMarkerAppearance(markerButton, current);
                 markerButton.addEventListener("click", (event) => {
@@ -280,8 +308,13 @@ playerForm.addEventListener("submit", (event) => {
         return;
     }
 
-    players.push({ name });
-    addPlayerToAllScales(name);
+    if (players.some((player) => player.name === name)) {
+        window.alert("同じ名前のプレイヤーが既に存在します。");
+        return;
+    }
+    const player = createPlayer(name);
+    players.push(player);
+    addPlayerToAllScales(player.id);
     playerForm.reset();
     renderPlayers();
 });
@@ -396,7 +429,21 @@ document.addEventListener("keydown", (event) => {
 
     if (helpModalEl?.classList.contains("open")) {
         closeHelpModal();
+        return;
     }
+    if (voteDrag) {
+        voteDrag.cancel();
+    } else if (cursors.pendingVoter) {
+        cursors.pendingVoter = null;
+        renderVotingContent();
+    }
+});
+
+deleteVoteBtn.addEventListener("click", () => {
+    if (!cursors.pendingVoter || !cursors.activeVotingDay) return;
+    applyVotingChange(() => deleteVote(currentState(), cursors.activeVotingDay, cursors.pendingVoter));
+    cursors.pendingVoter = null;
+    renderVotingContent();
 });
 
 if (undoVoteBtn) {
@@ -544,8 +591,9 @@ function handleBulkAdd() {
             skipped.push(name);
             return;
         }
-        players.push({ name });
-        addPlayerToAllScales(name);
+        const player = createPlayer(name);
+        players.push(player);
+        addPlayerToAllScales(player.id);
         existing.add(name);
         added.push(name);
     });
@@ -588,49 +636,16 @@ function deletePlayer(index) {
     }
 
     players.splice(index, 1);
-    removeSelectionsFor(target.name);
-    removePlayerFromAllScales(target.name);
+    removePlayerReferences(currentState(), target.id);
+    reconcileDeathRecords(currentState());
+    syncAllMediumCells();
+    updateVotingControls();
     if (cursors.editingPlayerIndex === index) {
         cursors.editingPlayerIndex = null;
     } else if (cursors.editingPlayerIndex !== null && cursors.editingPlayerIndex > index) {
         cursors.editingPlayerIndex -= 1;
     }
     renderPlayers();
-}
-
-function renameSelections(oldName, newName) {
-    Object.keys(coSelections).forEach((key) => {
-        if (coSelections[key] === oldName) {
-            coSelections[key] = newName;
-        }
-    });
-
-    Object.keys(roleAssignments).forEach((roleId) => {
-        if (roleAssignments[roleId] === oldName) {
-            roleAssignments[roleId] = newName;
-        }
-    });
-
-    if (deathRecords[oldName]) {
-        deathRecords[newName] = deathRecords[oldName];
-        delete deathRecords[oldName];
-    }
-}
-
-function removeSelectionsFor(name) {
-    Object.keys(coSelections).forEach((key) => {
-        if (coSelections[key] === name) {
-            delete coSelections[key];
-        }
-    });
-
-    Object.keys(roleAssignments).forEach((roleId) => {
-        if (roleAssignments[roleId] === name) {
-            delete roleAssignments[roleId];
-        }
-    });
-
-    delete deathRecords[name];
 }
 
 function removeSelectionsForRole(roleId) {
@@ -675,8 +690,6 @@ function finishEditingPlayer(index, newName, originalName) {
         return;
     }
 
-    renameSelections(originalName, newName);
-    renamePlayerInAllScales(originalName, newName);
     players[index].name = newName;
     cursors.editingPlayerIndex = null;
     renderPlayers();
@@ -700,7 +713,7 @@ function ensureScaleDay(day) {
 }
 
 function getPopulatedScaleDays() {
-    return days.filter((day) => Boolean(playerScales[day]));
+    return days.filter((day, index) => index === 0 || Boolean(playerScales[day]));
 }
 
 function getActiveScaleDay(populatedDays) {
@@ -738,9 +751,9 @@ function ensureScaleDayPopulated(dayLabel) {
     } else {
         playerScales[dayLabel] = {};
     }
-    players.forEach(({ name }) => {
-        if (!(name in playerScales[dayLabel])) {
-            playerScales[dayLabel][name] = 0.5;
+    players.forEach(({ id }) => {
+        if (!(id in playerScales[dayLabel])) {
+            playerScales[dayLabel][id] = 0.5;
         }
     });
     cursors.activeScaleDay = dayLabel;
@@ -754,28 +767,13 @@ function addPlayerToAllScales(name, value = 0.5) {
     });
 }
 
-function removePlayerFromAllScales(name) {
-    Object.keys(playerScales).forEach((day) => {
-        delete playerScales[day][name];
-    });
-}
-
-function renamePlayerInAllScales(oldName, newName) {
-    Object.keys(playerScales).forEach((day) => {
-        if (oldName in playerScales[day]) {
-            playerScales[day][newName] = playerScales[day][oldName];
-            delete playerScales[day][oldName];
-        }
-    });
-}
-
 function setThumbValue(thumb, name, value) {
     const v = clampScale(value);
     const day = getActiveScaleDay();
     setScaleValue(day, name, v);
     thumb.style.setProperty("--scale-pos", `${v * 100}%`);
     thumb.setAttribute("aria-valuenow", v.toFixed(2));
-    thumb.title = `${name}: ${v.toFixed(2)}`;
+    thumb.title = `${playerName(name)}: ${v.toFixed(2)}`;
     applyThumbContrast(thumb, v);
 }
 
@@ -883,17 +881,17 @@ function renderScaleList() {
     }
     list.classList.remove("empty");
     list.innerHTML = "";
-    players.forEach(({ name }) => {
-        let stored = getScaleValue(day, name);
+    players.forEach(({ id, name }) => {
+        let stored = getScaleValue(day, id);
         if (stored === undefined) {
             stored = 0.5;
-            setScaleValue(day, name, stored);
+            setScaleValue(day, id, stored);
         }
         const value = clampScale(stored);
 
         const row = document.createElement("div");
         row.className = "scale-row";
-        if (isAfterDeath(name, day)) {
+        if (isAfterDeath(id, day)) {
             row.classList.add("dead");
         }
 
@@ -901,7 +899,7 @@ function renderScaleList() {
         thumb.type = "button";
         thumb.className = "scale-thumb";
         thumb.textContent = name;
-        thumb.dataset.name = name;
+        thumb.dataset.player = id;
         thumb.setAttribute("role", "slider");
         thumb.setAttribute("aria-valuemin", "0");
         thumb.setAttribute("aria-valuemax", "1");
@@ -911,7 +909,7 @@ function renderScaleList() {
         thumb.title = `${name}: ${value.toFixed(2)}`;
         applyThumbContrast(thumb, value);
 
-        attachScaleThumbInteractions(thumb, row, name);
+        attachScaleThumbInteractions(thumb, row, id);
 
         row.appendChild(thumb);
         list.appendChild(row);
@@ -983,7 +981,7 @@ function shouldDisableCell(role, dayLabel) {
         return false;
     }
 
-    return isAfterDeath(assigned, dayLabel);
+    return isDeadBeforeDay(currentState(), assigned, dayLabel);
 }
 
 function isAfterDeath(playerName, dayLabel) {
@@ -1002,47 +1000,31 @@ function isAfterDeath(playerName, dayLabel) {
 
 function handleSelectionChange(role, dayLabel, value) {
     const key = getKey(role.id, dayLabel);
-    const previous = coSelections[key];
+    const deathRole = role.label === "吊り" || role.label === "噛み";
+    if (deathRole && !canRecordDeath(currentState(), role.id, dayLabel, value)) {
+        window.alert("この時点ですでに死亡しているプレイヤーは選べません。");
+        renderCOTable();
+        return;
+    }
     if (value) {
         coSelections[key] = value;
         ensureScaleDayPopulated(dayLabel);
     } else {
         delete coSelections[key];
     }
-
     autoAddDayIfNeeded(dayLabel, value);
-
-    if (role.label === "吊り") {
-        syncMediumCells(dayLabel, value);
-    }
-
-    if (role.label === "吊り" || role.label === "噛み") {
-        const changed = updateDeathRecord(previous, value, dayLabel);
-        if (changed) {
-            renderCOTable();
+    if (deathRole) {
+        const removed = reconcileDeathRecords(currentState());
+        syncAllMediumCells();
+        if (removed.length) {
+            window.alert("死亡記録を日付順に確認し、重複する後続の死亡入力を解除しました。");
         }
     }
-
-    updateCellStyles(role, dayLabel, value);
-}
-
-function syncMediumCells(dayLabel, value) {
-    const dayIndex = days.indexOf(dayLabel);
-    if (dayIndex === -1) {
-        return;
-    }
-
-    const targetDay = days[dayIndex + 1];
-    if (!targetDay) {
-        return;
-    }
-
-    updateMediumCellsForDay(targetDay, value);
+    renderCOTable();
+    renderScaleList();
 }
 
 function updateMediumCellsForDay(targetDay, value) {
-    let updated = false;
-
     roleRows.forEach((role) => {
         if (role.label !== "霊能者") {
             return;
@@ -1052,17 +1034,14 @@ function updateMediumCellsForDay(targetDay, value) {
         if (value) {
             if (coSelections[key] !== value) {
                 coSelections[key] = value;
-                updated = true;
+                delete markerSelections[key];
             }
         } else if (coSelections[key]) {
             delete coSelections[key];
-            updated = true;
+            delete markerSelections[key];
         }
     });
 
-    if (updated) {
-        renderCOTable();
-    }
 }
 
 function syncNewMediumRow(newRole) {
@@ -1111,31 +1090,12 @@ function findRoleIdByLabel(label) {
     return role ? role.id : null;
 }
 
-function updateDeathRecord(previous, next, dayLabel) {
-    let changed = false;
-    const dayIndex = days.indexOf(dayLabel);
-
-    if (previous) {
-        const existing = deathRecords[previous];
-        if (existing && (dayIndex === -1 || existing.dayIndex === dayIndex)) {
-            delete deathRecords[previous];
-            changed = true;
-        }
+function syncAllMediumCells() {
+    const lynchRoleId = findRoleIdByLabel("吊り");
+    if (!lynchRoleId) return;
+    for (let i = 1; i < days.length; i += 1) {
+        updateMediumCellsForDay(days[i], coSelections[getKey(lynchRoleId, days[i - 1])] || "");
     }
-
-    if (next) {
-        if (dayIndex === -1) {
-            return changed;
-        }
-
-        const current = deathRecords[next];
-        if (!current || current.dayIndex !== dayIndex) {
-            deathRecords[next] = { dayIndex };
-            changed = true;
-        }
-    }
-
-    return changed;
 }
 
 function supportsRoleMenu(label) {
@@ -1174,6 +1134,7 @@ function renderVotingTabs() {
         button.textContent = day;
         button.addEventListener("click", () => {
             cursors.activeVotingDay = day;
+            cursors.pendingVoter = null;
             renderVotingTabs();
         });
         votingTabsEl.appendChild(button);
@@ -1183,6 +1144,10 @@ function renderVotingTabs() {
 }
 
 function renderVotingContent() {
+    voteDrag?.cancel();
+    voteEndpointController?.abort();
+    voteResizeObserver?.disconnect();
+    updateVotingControls();
     votingContentEl.innerHTML = "";
 
     if (!cursors.activeVotingDay) {
@@ -1214,13 +1179,13 @@ function renderVotingContent() {
         const row = document.createElement("div");
         row.className = "voting-row";
 
-        row.appendChild(createVotingItem(player.name, "voter", dayVotes));
+        row.appendChild(createVotingItem(player.id, "voter", dayVotes));
 
         const connector = document.createElement("div");
         connector.className = "vote-connector";
         row.appendChild(connector);
 
-        row.appendChild(createVotingItem(player.name, "target", dayVotes));
+        row.appendChild(createVotingItem(player.id, "target", dayVotes));
 
         rows.appendChild(row);
     });
@@ -1238,6 +1203,13 @@ function renderVotingContent() {
 
     setupVotingInteractions(visualWrapper, dayVotes);
     drawVotingLines(visualWrapper, svg, dayVotes);
+    if (typeof ResizeObserver !== "undefined") {
+        voteResizeObserver = new ResizeObserver(() => {
+            voteDrag?.cancel();
+            drawVotingLines(visualWrapper, svg, dayVotes);
+        });
+        voteResizeObserver.observe(visualWrapper);
+    }
 }
 
 function createVotingColumnHeader() {
@@ -1274,31 +1246,146 @@ function setupVotingInteractions(wrapper, dayVotes) {
 }
 
 function drawVotingLines(wrapper, svg, dayVotes) {
+    voteEndpointController?.abort();
+    wrapper.querySelectorAll(".vote-endpoint-dot").forEach((dot) => {
+        dot.classList.remove("vote-endpoint-dot");
+        dot.removeAttribute("title");
+    });
     const rect = wrapper.getBoundingClientRect();
-    const width = rect.width;
-    const height = rect.height;
-    svg.setAttribute("width", width);
-    svg.setAttribute("height", height);
-    svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
-    svg.innerHTML = "";
-
-    Object.entries(dayVotes).forEach(([voter, target], index) => {
+    if (!rect.width || !rect.height) return;
+    svg.setAttribute("viewBox", `0 0 ${rect.width} ${rect.height}`);
+    svg.replaceChildren();
+    const entries = Object.entries(dayVotes);
+    // Draw the selected connection last so its red outline stays visible at crossings.
+    entries.sort(([a], [b]) => Number(a === cursors.pendingVoter) - Number(b === cursors.pendingVoter));
+    for (const [voter, target] of entries) {
         const start = getDotCenter(wrapper, voter, "voter");
         const end = getDotCenter(wrapper, target, "target");
-
-        if (!start || !end) {
-            return;
+        if (!start || !end) continue;
+        const selected = voter === cursors.pendingVoter;
+        const group = document.createElementNS(svg.namespaceURI, "g");
+        group.dataset.voter = voter;
+        group.classList.toggle("selected-vote", selected);
+        const makeLine = (className) => {
+            const line = document.createElementNS(svg.namespaceURI, "line");
+            line.setAttribute("x1", start.x);
+            line.setAttribute("y1", start.y);
+            line.setAttribute("x2", end.x);
+            line.setAttribute("y2", end.y);
+            line.classList.add(className);
+            group.appendChild(line);
+            return line;
+        };
+        const outline = makeLine("vote-connection-outline");
+        const line = makeLine("vote-connection");
+        const hit = makeLine("vote-connection-hit");
+        // Keep the wider hit area away from the dots so shared targets remain clickable.
+        const length = Math.hypot(end.x - start.x, end.y - start.y);
+        if (length > 30) {
+            const dx = (end.x - start.x) / length * 15;
+            const dy = (end.y - start.y) / length * 15;
+            hit.setAttribute("x1", start.x + dx);
+            hit.setAttribute("y1", start.y + dy);
+            hit.setAttribute("x2", end.x - dx);
+            hit.setAttribute("y2", end.y - dy);
         }
+        hit.addEventListener("click", () => handleVoterClick(voter));
+        svg.appendChild(group);
+        if (selected) {
+            const handle = document.createElementNS(svg.namespaceURI, "circle");
+            handle.classList.add("vote-endpoint-handle");
+            handle.setAttribute("cx", end.x);
+            handle.setAttribute("cy", end.y);
+            handle.setAttribute("r", "12");
+            const title = document.createElementNS(svg.namespaceURI, "title");
+            title.textContent = `${playerName(voter)}の投票先をドラッグして変更`;
+            handle.appendChild(title);
+            group.appendChild(handle);
+            attachVoteEndpointDrag(handle, wrapper, line, outline, voter);
+        }
+    }
+}
 
-        const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
-        line.setAttribute("x1", start.x);
-        line.setAttribute("y1", start.y);
-        line.setAttribute("x2", end.x);
-        line.setAttribute("y2", end.y);
-        line.classList.add("vote-connection");
-        line.dataset.order = `${index}`;
-        svg.appendChild(line);
-    });
+function attachVoteEndpointDrag(handle, wrapper, line, outline, voter) {
+    const day = cursors.activeVotingDay;
+    const originalTarget = votingData[day]?.[voter];
+    const endpoint = wrapper.querySelector(`.vote-dot[data-side="target"][data-player="${originalTarget}"]`);
+    if (!endpoint) return;
+    endpoint.classList.add("vote-endpoint-dot");
+    endpoint.title = "線の先端をドラッグして投票先を変更";
+    voteEndpointController = new AbortController();
+    const { signal } = voteEndpointController;
+    let drag = null;
+    let suppressClick = false;
+    const clearCandidate = () => wrapper.querySelectorAll(".drop-candidate").forEach((dot) => dot.classList.remove("drop-candidate"));
+    const drawEndpoint = (point) => {
+        for (const segment of [line, outline]) {
+            segment.setAttribute("x2", point.x);
+            segment.setAttribute("y2", point.y);
+        }
+        handle.setAttribute("cx", point.x);
+        handle.setAttribute("cy", point.y);
+    };
+    const findTarget = (clientX, clientY) => {
+        if (isDeadBeforeDay(currentState(), voter, day)) return null;
+        let closest = null;
+        let distance = 26;
+        for (const dot of wrapper.querySelectorAll('.vote-dot[data-side="target"]')) {
+            if (isDeadBeforeDay(currentState(), dot.dataset.player, day)) continue;
+            const rect = dot.getBoundingClientRect();
+            const d = Math.hypot(clientX - rect.left - rect.width / 2, clientY - rect.top - rect.height / 2);
+            if (d < distance) { closest = dot; distance = d; }
+        }
+        return closest;
+    };
+    const cancel = () => {
+        if (!drag) return;
+        const pointerId = drag.pointerId;
+        drag = null;
+        voteDrag = null;
+        clearCandidate();
+        wrapper.classList.remove("dragging-vote");
+        const end = getDotCenter(wrapper, originalTarget, "target");
+        if (end) drawEndpoint(end);
+        if (endpoint.hasPointerCapture(pointerId)) endpoint.releasePointerCapture(pointerId);
+    };
+    endpoint.addEventListener("pointerdown", (event) => {
+        if (!event.isPrimary || event.button !== 0) return;
+        event.preventDefault();
+        voteDrag?.cancel();
+        suppressClick = false;
+        drag = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, moved: false };
+        voteDrag = { cancel };
+        wrapper.classList.add("dragging-vote");
+        endpoint.setPointerCapture(event.pointerId);
+    }, { signal });
+    endpoint.addEventListener("pointermove", (event) => {
+        if (!drag || event.pointerId !== drag.pointerId) return;
+        if (Math.hypot(event.clientX - drag.x, event.clientY - drag.y) > 4) {
+            drag.moved = true;
+            suppressClick = true;
+        }
+        clearCandidate();
+        const candidate = findTarget(event.clientX, event.clientY);
+        if (candidate) candidate.classList.add("drop-candidate");
+        const rect = wrapper.getBoundingClientRect();
+        drawEndpoint(candidate ? getDotCenter(wrapper, candidate.dataset.player, "target")
+            : { x: event.clientX - rect.left, y: event.clientY - rect.top });
+    }, { signal });
+    endpoint.addEventListener("pointerup", (event) => {
+        if (!drag || event.pointerId !== drag.pointerId) return;
+        const candidate = drag.moved ? findTarget(event.clientX, event.clientY) : null;
+        cancel();
+        if (candidate && cursors.activeVotingDay === day) handleTargetClick(candidate.dataset.player);
+    }, { signal });
+    endpoint.addEventListener("pointercancel", cancel, { signal });
+    endpoint.addEventListener("lostpointercapture", cancel, { signal });
+    endpoint.addEventListener("click", (event) => {
+        if (!suppressClick) return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        suppressClick = false;
+    }, { capture: true, signal });
 }
 
 function getDotCenter(wrapper, playerName, side) {
@@ -1323,12 +1410,14 @@ function createVotingItem(name, side, dayVotes) {
     if (side === "voter") {
         item.classList.add("voting-item-left");
     }
-    if (cursors.activeVotingDay && isAfterDeath(name, cursors.activeVotingDay)) {
+    if (cursors.activeVotingDay && isDeadBeforeDay(currentState(), name, cursors.activeVotingDay)) {
         item.classList.add("dead");
     }
 
-    const dot = document.createElement("span");
+    const dot = document.createElement("button");
+    dot.type = "button";
     dot.className = "vote-dot";
+    dot.setAttribute("aria-label", `${playerName(name)}を${side === "voter" ? "投票者" : "投票先"}に選択`);
     dot.dataset.player = name;
     dot.dataset.side = side;
 
@@ -1353,7 +1442,7 @@ function createVotingItem(name, side, dayVotes) {
 
     const label = document.createElement("span");
     label.className = "vote-name";
-    label.textContent = name;
+    label.textContent = playerName(name);
 
     item.appendChild(dot);
     item.appendChild(label);
@@ -1371,57 +1460,16 @@ function handleVoterClick(name) {
 }
 
 function handleTargetClick(targetName) {
-    if (!cursors.pendingVoter) {
-        const removed = applyVotingChange(() => removeVoteByTarget(targetName));
-        if (removed) {
-            renderVotingContent();
-        }
-        return;
+    if (!cursors.pendingVoter || !cursors.activeVotingDay) return;
+    const existing = votingData[cursors.activeVotingDay]?.[cursors.pendingVoter];
+    if (existing !== targetName) {
+        const changed = applyVotingChange(() => setVote(
+            currentState(), cursors.activeVotingDay, cursors.pendingVoter, targetName
+        ));
+        if (!changed) window.alert("前日までに死亡したプレイヤーへの投票・投票者への指定はできません。");
     }
-
-    const changed = applyVotingChange(() => {
-        if (!cursors.activeVotingDay) {
-            return false;
-        }
-
-        if (!votingData[cursors.activeVotingDay]) {
-            votingData[cursors.activeVotingDay] = {};
-        }
-
-        const dayVotes = votingData[cursors.activeVotingDay];
-        if (dayVotes[cursors.pendingVoter] === targetName) {
-            delete dayVotes[cursors.pendingVoter];
-        } else {
-            dayVotes[cursors.pendingVoter] = targetName;
-        }
-        return true;
-    });
-
-    if (changed) {
-        cursors.pendingVoter = null;
-        renderVotingContent();
-    }
-}
-
-function removeVoteByTarget(targetName) {
-    if (!cursors.activeVotingDay) {
-        return false;
-    }
-
-    const dayVotes = votingData[cursors.activeVotingDay];
-    if (!dayVotes) {
-        return false;
-    }
-
-    let removed = false;
-    Object.keys(dayVotes).forEach((voter) => {
-        if (dayVotes[voter] === targetName) {
-            delete dayVotes[voter];
-            removed = true;
-        }
-    });
-
-    return removed;
+    cursors.pendingVoter = null;
+    renderVotingContent();
 }
 
 function cloneVotingData() {
@@ -1469,6 +1517,7 @@ function redoVotingChange() {
 }
 
 function updateVotingControls() {
+    deleteVoteBtn.disabled = !votingData[cursors.activeVotingDay]?.[cursors.pendingVoter];
     if (!undoVoteBtn || !redoVoteBtn) {
         return;
     }
@@ -1522,16 +1571,24 @@ function renderVotingSummary(dayVotes) {
 
         entries.forEach(([voter, target]) => {
             const row = document.createElement("tr");
+            row.dataset.voter = voter;
+            row.classList.toggle("selected-vote-row", voter === cursors.pendingVoter);
+            row.addEventListener("click", () => handleVoterClick(voter));
             if (
                 currentDay &&
-                (isAfterDeath(voter, currentDay) || isAfterDeath(target, currentDay))
+                (isDeadBeforeDay(currentState(), voter, currentDay) || isDeadBeforeDay(currentState(), target, currentDay))
             ) {
                 row.classList.add("dead");
             }
             const voterCell = document.createElement("td");
-            voterCell.textContent = voter;
+            const selectVote = document.createElement("button");
+            selectVote.type = "button";
+            selectVote.className = "vote-history-select";
+            selectVote.textContent = playerName(voter);
+            selectVote.setAttribute("aria-label", `${playerName(voter)}の投票を修正`);
+            voterCell.appendChild(selectVote);
             const targetCell = document.createElement("td");
-            targetCell.textContent = target;
+            targetCell.textContent = playerName(target);
             const countCell = document.createElement("td");
             const count = targetCounts[target];
             if (count && count > 1) {
@@ -1653,10 +1710,104 @@ if (themeToggleBtn) {
     });
 }
 
+function saveCurrentMatch() {
+    clearTimeout(saveTimer);
+    if (!archiveWritable) return false;
+    const match = matchArchive.matches.find((item) => item.id === matchArchive.activeMatchId);
+    match.state = structuredClone({ ...currentState(),
+        cursors: { ...cursors, pendingVoter: null, editingPlayerIndex: null },
+        memoText: memoTextarea.value, resultText: exportResultInput.value, rolesText: exportRolesInput.value,
+    });
+    match.updatedAt = new Date().toISOString();
+    try {
+        localStorage.setItem(MATCHES_STORAGE_KEY, JSON.stringify(matchArchive));
+        saveStatus.textContent = "";
+        saveStatus.classList.remove("save-error");
+        return true;
+    } catch {
+        saveStatus.textContent = "保存できません。空き容量やブラウザの保存設定を確認してください。";
+        saveStatus.classList.add("save-error");
+        return false;
+    }
+}
+
+function openMatch(id) {
+    const match = matchArchive.matches.find((item) => item.id === id);
+    if (!match) return;
+    matchArchive.activeMatchId = id;
+    restoreState(match.state);
+    reconcileDeathRecords(currentState());
+    memoTextarea.value = match.state.memoText;
+    exportResultInput.value = match.state.resultText;
+    exportRolesInput.value = match.state.rolesText;
+    playerForm.reset();
+    bulkInputEl.value = "";
+    lastSummaryDay = null;
+    lastSummaryCount = 0;
+    renderPlayers();
+    updateVotingControls();
+    document.querySelectorAll(".co-tab").forEach((tab) => {
+        const active = tab.dataset.coTab === cursors.activeCoTab;
+        tab.classList.toggle("active", active);
+        tab.setAttribute("aria-selected", String(active));
+    });
+    document.querySelectorAll(".co-tab-panel").forEach((panel) => {
+        panel.hidden = panel.dataset.coTab !== cursors.activeCoTab;
+    });
+    matchSelect.replaceChildren();
+    for (const item of matchArchive.matches) {
+        const option = document.createElement("option");
+        option.value = item.id;
+        option.textContent = item.title;
+        option.selected = item.id === id;
+        matchSelect.appendChild(option);
+    }
+}
+
+function initializeMatches() {
+    let raw = null;
+    try { raw = localStorage.getItem(MATCHES_STORAGE_KEY); } catch { /* Saving reports storage errors below. */ }
+    try {
+        matchArchive = parseArchive(raw);
+    } catch {
+        // Keep the original stored bytes intact if a future version or damaged data is encountered.
+        matchArchive = createArchive();
+        archiveWritable = false;
+        saveStatus.textContent = "保存データを読み込めません。元データの上書きを停止しています。";
+        saveStatus.classList.add("save-error");
+        newMatchBtn.disabled = true;
+    }
+    openMatch(matchArchive.activeMatchId);
+    if (archiveWritable) saveCurrentMatch();
+    matchSelect.addEventListener("change", () => {
+        const nextId = matchSelect.value;
+        saveCurrentMatch();
+        openMatch(nextId);
+        saveCurrentMatch();
+    });
+    newMatchBtn.addEventListener("click", () => {
+        saveCurrentMatch();
+        const next = createMatch(matchArchive.matches.length + 1, players);
+        matchArchive.matches.push(next);
+        openMatch(next.id);
+        saveCurrentMatch();
+    });
+    // Run after each interaction's handlers; pointer movement is saved on release.
+    for (const event of ["input", "change", "click", "keydown", "pointerup", "pointercancel"]) {
+        document.addEventListener(event, () => {
+            clearTimeout(saveTimer);
+            saveTimer = setTimeout(saveCurrentMatch, 120);
+        }, true);
+    }
+    window.addEventListener("pagehide", saveCurrentMatch);
+    document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "hidden") saveCurrentMatch();
+    });
+}
+
 initializeHelpModalContent();
 attachCoTabHandlers();
-updateVotingControls();
-renderPlayers();
+initializeMatches();
 initializeThemePreference();
 
 function getActiveTheme() {
@@ -1704,8 +1855,6 @@ function getStoredTheme() {
     }
 }
 
-
-
 function exportMatchSummary({ resultText, rolesText }) {
     const exportedAt = formatExportTimestamp(new Date());
     const data = buildSummaryData({ resultText, rolesText, exportedAt });
@@ -1720,10 +1869,11 @@ function buildSummaryData({ resultText, rolesText, exportedAt }) {
     const coHeaders = ["役職", ...days];
     const coRows = roleRows.map((role) => {
         const assignment = supportsAssignment(role.label) && roleAssignments[role.id]
-            ? roleAssignments[role.id]
+            ? playerName(roleAssignments[role.id])
             : "";
         const rows = days.map((day) => {
-            const value = coSelections[getKey(role.id, day)] || "-";
+            const id = coSelections[getKey(role.id, day)];
+            const value = id ? playerName(id) : "-";
             const marker = getMarkerSymbol(role.id, day, value);
             if (!marker) {
                 return value;
@@ -1748,7 +1898,7 @@ function buildSummaryData({ resultText, rolesText, exportedAt }) {
         const rows = entries.map(([voter, target]) => {
             const count = counts[target] || 1;
             const orderText = count > 1 ? `${getVoteOrder(entries, target, voter)}票目 / ${count}票` : "1票目";
-            return [voter, target, orderText];
+            return [playerName(voter), playerName(target), orderText];
         });
         return { day, rows };
     });

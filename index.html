@@ -4,7 +4,7 @@
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>人狼パワーツール</title>
-        <link rel="stylesheet" href="styles.css?v=20260502-8">
+        <link rel="stylesheet" href="styles.css?v=20261101-4">
         <link rel="icon" href="images/okami_halloween_gray.png" type="image/png">
     </head>
 <body>
@@ -44,6 +44,12 @@
                 </button>
             </div>
         </header>
+        <section class="match-toolbar" aria-label="試合管理">
+            <label for="matchSelect">試合</label>
+            <select id="matchSelect" aria-label="表示する試合"></select>
+            <button type="button" id="newMatchBtn">記録して次の試合へ</button>
+            <span id="saveStatus" role="status" aria-live="polite"></span>
+        </section>
         <main class="main-layout">
             <section class="panel players-panel">
                 <div class="panel-header">
@@ -80,6 +86,7 @@
                             <div class="voting-tabs" id="votingTabs"></div>
                             <div class="voting-content-wrap">
                                 <div class="voting-controls">
+                                    <button type="button" id="deleteVoteBtn" disabled>選択した1票を削除</button>
                                     <button type="button" id="undoVoteBtn" disabled>1つ戻る</button>
                                     <button type="button" id="redoVoteBtn" disabled>1つ進む</button>
                                 </div>
@@ -141,6 +148,6 @@
             </div>
         </div>
     </div>
-    <script type="module" src="main.js?v=20260502-8"></script>
+    <script type="module" src="main.js?v=20261101-4"></script>
 </body>
 </html>
