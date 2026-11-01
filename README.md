@@ -14,6 +14,7 @@ Vercel で静的サイトとして公開できます。サーバー処理・DB�
 ビルドは `node deploy/build-static.mjs`、公開ディレクトリは `dist` です。
 依存パッケージのインストールは不要で、HTML・CSS・JS・画像・フォントだけを公開用にコピーします。
 以後は `deploy` ブランチへの push で Vercel が本番を更新します。
+更新後は Vercel の Deployments で、Source が push したコミットに一致し、Status が Ready、Environment が Production であることを確認してください。
 
 ### サイトマップ
 
