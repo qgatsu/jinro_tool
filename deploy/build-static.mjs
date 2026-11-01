@@ -5,6 +5,8 @@ const output = new URL("dist/", root);
 const assets = [
     "index.html",
     "help-content.html",
+    "sitemap.xml",
+    "robots.txt",
     "styles.css",
     "main.js",
     "src",

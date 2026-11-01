@@ -15,6 +15,13 @@ Vercel で静的サイトとして公開できます。サーバー処理・DB�
 依存パッケージのインストールは不要で、HTML・CSS・JS・画像・フォントだけを公開用にコピーします。
 以後は `deploy` ブランチへの push で Vercel が本番を更新します。
 
+### サイトマップ
+
+`sitemap.xml` に検索対象のトップページを記載し、`robots.txt` から参照しています。
+両ファイルはビルド時に `dist/` へコピーされます。
+公開後、Search Console の「サイトマップ」で `https://www.jinro-powertool.com/sitemap.xml` を送信してください。
+独立したページを追加する場合は、`sitemap.xml` にその正規 URL を追加します。
+
 公式ドキュメント: [GitHub 連携](https://vercel.com/docs/git/vercel-for-github)、[ビルド設定](https://vercel.com/docs/builds/configure-a-build)。
 
 ### 公開ファイルのローカル確認
