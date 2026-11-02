@@ -19,6 +19,10 @@ import {
     restoreState,
 } from "./src/state.js?v=20261101-4";
 import { createPlayer, removePlayerReferences, canRecordDeath, reconcileDeathRecords, isDeadBeforeDay, setVote, deleteVote } from "./src/game.mjs?v=20261101-4";
+import { buildMatchReport, safeExportName, pdfNames, formatExportDate } from "./src/report.mjs?v=20261103-2";
+import { createPdf } from "./src/export-pdf.mjs?v=20261103-2";
+import { createZip } from "./src/zip.mjs?v=20261103-2";
+import { ArchiveStorage, StorageConflictError } from "./src/storage.mjs?v=20261103-2";
 import { MATCHES_STORAGE_KEY, createArchive, createMatch, parseArchive } from "./src/matches.mjs?v=20261101-4";
 
 const playerListEl = document.getElementById("playersList");
@@ -48,15 +52,28 @@ const exportCancelBtn = document.getElementById("exportCancelBtn");
 const exportSubmitBtn = document.getElementById("exportSubmitBtn");
 const exportResultInput = document.getElementById("exportResultInput");
 const exportRolesInput = document.getElementById("exportRolesInput");
+const exportFolderInput = document.getElementById("exportFolderInput");
+const exportGMInput = document.getElementById("exportGMInput");
+const exportScopeInput = document.getElementById("exportScopeInput");
+const exportMatchSelect = document.getElementById("exportMatchSelect");
+const exportStatus = document.getElementById("exportStatus");
+const exportFilenamePreview = document.getElementById("exportFilenamePreview");
+let exportEditingMatchId = null;
+let exportBusy = false;
 const openExportModalBtn = document.getElementById("openExportModalBtn");
 const openHelpModalBtn = document.getElementById("openHelpModalBtn");
 const helpModalEl = document.getElementById("helpModal");
 const matchSelect = document.getElementById("matchSelect");
 const newMatchBtn = document.getElementById("newMatchBtn");
+const resetMatchBtn = document.getElementById("resetMatchBtn");
 const saveStatus = document.getElementById("saveStatus");
+const reloadMatchesBtn = document.getElementById("reloadMatchesBtn");
 let matchArchive;
+let archiveStorage;
+let storageConflict = false;
 let archiveWritable = true;
 let saveTimer;
+let activeModal = null;
 
 function playerName(id) {
     return players.find((player) => player.id === id)?.name || "不明なプレイヤー";
@@ -85,7 +102,11 @@ function renderPlayers() {
                 input.type = "text";
                 input.value = player.name;
                 input.className = "player-edit-input";
+                let composing = false;
+                input.addEventListener("compositionstart", () => { composing = true; });
+                input.addEventListener("compositionend", () => { composing = false; });
                 input.addEventListener("keydown", (event) => {
+                    if (composing || event.isComposing || event.keyCode === 229) return;
                     if (event.key === "Enter") {
                         event.preventDefault();
                         finishEditingPlayer(index, input.value.trim(), player.name);
@@ -352,17 +373,7 @@ if (bulkSubmitBtn) {
 }
 
 if (openExportModalBtn) {
-    const activateExportModal = () => {
-        openExportModal();
-    };
-    openExportModalBtn.addEventListener("click", activateExportModal);
-    openExportModalBtn.addEventListener("keydown", (event) => {
-        if (event.key !== "Enter" && event.key !== " ") {
-            return;
-        }
-        event.preventDefault();
-        activateExportModal();
-    });
+    openExportModalBtn.addEventListener("click", openExportModal);
 }
 
 if (exportModalClose) {
@@ -413,6 +424,24 @@ if (helpModalEl) {
 }
 
 document.addEventListener("keydown", (event) => {
+    if (event.isComposing || event.keyCode === 229) return;
+    if (event.key === "Tab" && activeModal) {
+        const controls = modalControls(activeModal);
+        const first = controls[0];
+        const last = controls[controls.length - 1];
+        const outside = !activeModal.contains(document.activeElement);
+        if (!first) {
+            event.preventDefault();
+            activeModal.querySelector(".modal").focus();
+        } else if (event.shiftKey && (outside || document.activeElement === first)) {
+            event.preventDefault();
+            last.focus();
+        } else if (!event.shiftKey && (outside || document.activeElement === last)) {
+            event.preventDefault();
+            first.focus();
+        }
+        return;
+    }
     if (event.key !== "Escape") {
         return;
     }
@@ -439,6 +468,31 @@ document.addEventListener("keydown", (event) => {
     }
 });
 
+function modalControls(overlay) {
+    return [...overlay.querySelectorAll('button, input, textarea, select, a[href], [tabindex]:not([tabindex="-1"])')]
+        .filter((element) => !element.matches(":disabled") && element.getClientRects().length);
+}
+
+function showModal(overlay, focusElement) {
+    overlay.classList.add("open");
+    overlay.setAttribute("aria-hidden", "false");
+    const dialog = overlay.querySelector(".modal");
+    dialog.tabIndex = -1;
+    dialog.setAttribute("role", "dialog");
+    dialog.setAttribute("aria-modal", "true");
+    activeModal = overlay;
+    document.querySelector(".app").inert = true;
+    queueMicrotask(() => (focusElement || modalControls(overlay)[0] || dialog).focus());
+}
+
+function hideModal(overlay, opener) {
+    overlay.classList.remove("open");
+    activeModal = null;
+    document.querySelector(".app").inert = false;
+    opener?.focus();
+    overlay.setAttribute("aria-hidden", "true");
+}
+
 deleteVoteBtn.addEventListener("click", () => {
     if (!cursors.pendingVoter || !cursors.activeVotingDay) return;
     applyVotingChange(() => deleteVote(currentState(), cursors.activeVotingDay, cursors.pendingVoter));
@@ -463,8 +517,7 @@ function openBulkModal() {
         return;
     }
 
-    bulkModalEl.classList.add("open");
-    bulkModalEl.setAttribute("aria-hidden", "false");
+    showModal(bulkModalEl, bulkInputEl);
     if (bulkInputEl) {
         queueMicrotask(() => {
             bulkInputEl.focus();
@@ -478,29 +531,31 @@ function closeBulkModal() {
         return;
     }
 
-    bulkModalEl.classList.remove("open");
-    bulkModalEl.setAttribute("aria-hidden", "true");
+    hideModal(bulkModalEl, openBulkModalBtn);
 }
 
 function openExportModal() {
-    if (!exportModalEl) {
-        return;
+    if (!exportModalEl || exportBusy) return;
+    saveCurrentMatch();
+    if (!exportFolderInput.value.trim()) exportFolderInput.value = "人狼村";
+    exportMatchSelect.replaceChildren();
+    for (const match of matchArchive.matches) {
+        const option = document.createElement("option");
+        option.value = match.id;
+        option.textContent = match.title;
+        exportMatchSelect.appendChild(option);
     }
-
-    exportModalEl.classList.add("open");
-    exportModalEl.setAttribute("aria-hidden", "false");
-    queueMicrotask(() => {
-        exportResultInput?.focus();
-    });
+    loadExportMatch(matchArchive.activeMatchId);
+    updateExportScope();
+    exportStatus.textContent = storageConflict ? "別タブで更新済みです。この画面の記録は古い状態です。" : "";
+    exportStatus.classList.toggle("export-error", storageConflict);
+    showModal(exportModalEl, exportFolderInput);
 }
 
 function closeExportModal() {
-    if (!exportModalEl) {
-        return;
-    }
-
-    exportModalEl.classList.remove("open");
-    exportModalEl.setAttribute("aria-hidden", "true");
+    if (!exportModalEl || exportBusy) return;
+    saveCurrentMatch();
+    hideModal(exportModalEl, openExportModalBtn);
 }
 
 function openHelpModal() {
@@ -508,8 +563,7 @@ function openHelpModal() {
         return;
     }
 
-    helpModalEl.classList.add("open");
-    helpModalEl.setAttribute("aria-hidden", "false");
+    showModal(helpModalEl);
 }
 
 function closeHelpModal() {
@@ -517,9 +571,7 @@ function closeHelpModal() {
         return;
     }
 
-    helpModalEl.classList.remove("open");
-    helpModalEl.setAttribute("aria-hidden", "true");
-    openHelpModalBtn?.focus();
+    hideModal(helpModalEl, openHelpModalBtn);
 }
 
 function initializeHelpModalContent() {
@@ -555,6 +607,9 @@ function bindHelpModalCloseHandlers() {
         return;
     }
 
+    if (activeModal === helpModalEl && !helpModalEl.contains(document.activeElement)) {
+        (modalControls(helpModalEl)[0] || helpModalEl.querySelector(".modal")).focus();
+    }
     const closeButtons = helpModalEl.querySelectorAll("[data-help-close]");
     closeButtons.forEach((button) => {
         button.addEventListener("click", () => {
@@ -563,11 +618,80 @@ function bindHelpModalCloseHandlers() {
     });
 }
 
-function handleExportSummary() {
-    const resultText = exportResultInput?.value.trim() || "";
-    const rolesText = exportRolesInput?.value.trim() || "";
-    closeExportModal();
-    exportMatchSummary({ resultText, rolesText });
+async function handleExportSummary() {
+    if (exportBusy) return;
+    saveCurrentMatch();
+    const folderName = safeExportName(exportFolderInput.value, "人狼村");
+    exportFolderInput.value = folderName;
+    const settings = { sessionName: folderName, gmName: exportGMInput.value.trim(), exportedAt: formatExportDate() };
+    const all = exportScopeInput.value === "all";
+    const selected = all ? matchArchive.matches : matchArchive.matches.filter((match) => match.id === exportEditingMatchId);
+    if (!selected.length) { exportStatus.textContent = "出力する試合を選択してください。"; return; }
+    const matches = structuredClone(selected);
+    const names = pdfNames(matches, { villageName: folderName, exportedAt: settings.exportedAt });
+    exportBusy = true;
+    let complete = false;
+    exportStatus.classList.remove("export-error");
+    for (const element of exportModalEl.querySelectorAll("fieldset, button")) element.disabled = true;
+    try {
+        await document.fonts.ready;
+        const entries = [];
+        for (let i = 0; i < matches.length; i += 1) {
+            exportStatus.textContent = `PDFを作成中（${i + 1} / ${matches.length}試合）`;
+            await new Promise((resolve) => setTimeout(resolve, 0));
+            const data = createPdf(buildMatchReport(matches[i], settings));
+            entries.push({ name: `${folderName}/${names[i]}`, data });
+        }
+        const blob = all ? createZip(entries) : new Blob([entries[0].data], { type: "application/pdf" });
+        const filename = all ? `${folderName}.zip` : names[0];
+        triggerExportDownload(blob, filename);
+        complete = true;
+    } catch (error) {
+        exportStatus.textContent = `出力できませんでした。${error.message || "もう一度お試しください。"}`;
+        exportStatus.classList.add("export-error");
+    } finally {
+        exportBusy = false;
+        for (const element of exportModalEl.querySelectorAll("fieldset, button")) element.disabled = false;
+        updateExportScope();
+        saveCurrentMatch();
+    }
+    if (complete) closeExportModal();
+}
+
+function loadExportMatch(id) {
+    const match = matchArchive.matches.find((item) => item.id === id);
+    if (!match) return;
+    exportEditingMatchId = id;
+    exportMatchSelect.value = id;
+    exportResultInput.value = match.state.resultText;
+    exportRolesInput.value = match.state.rolesText;
+    updateExportPreview();
+}
+
+function updateExportScope() {
+    const all = exportScopeInput.value === "all";
+    exportScopeInput.querySelector('[value="all"]').textContent = `全${matchArchive.matches.length}試合（ZIP）`;
+    exportSubmitBtn.textContent = all ? "ZIPをダウンロード" : "PDFをダウンロード";
+    updateExportPreview();
+}
+
+function updateExportPreview() {
+    const villageName = safeExportName(exportFolderInput.value, "人狼村");
+    const all = exportScopeInput.value === "all";
+    const matches = all ? matchArchive.matches : matchArchive.matches.filter((match) => match.id === exportEditingMatchId);
+    const names = pdfNames(matches, { villageName });
+    exportFilenamePreview.textContent = names.map((name) => all ? `${villageName}/${name}` : name).join("\n");
+}
+
+function triggerExportDownload(blob, filename) {
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 30000);
 }
 
 function handleBulkAdd() {
@@ -1017,7 +1141,7 @@ function handleSelectionChange(role, dayLabel, value) {
         const removed = reconcileDeathRecords(currentState());
         syncAllMediumCells();
         if (removed.length) {
-            window.alert("死亡記録を日付順に確認し、重複する後続の死亡入力を解除しました。");
+            window.alert("後日の重複した死亡記録を解除しました。");
         }
     }
     renderCOTable();
@@ -1712,19 +1836,35 @@ if (themeToggleBtn) {
 
 function saveCurrentMatch() {
     clearTimeout(saveTimer);
-    if (!archiveWritable) return false;
+    if (!matchArchive) return false;
+    const edited = matchArchive.matches.find((item) => item.id === exportEditingMatchId);
+    if (edited && (edited.state.resultText !== exportResultInput.value || edited.state.rolesText !== exportRolesInput.value)) {
+        edited.state.resultText = exportResultInput.value;
+        edited.state.rolesText = exportRolesInput.value;
+        edited.updatedAt = new Date().toISOString();
+    }
+    matchArchive.exportSettings = { folderName: exportFolderInput.value, gmName: exportGMInput.value };
     const match = matchArchive.matches.find((item) => item.id === matchArchive.activeMatchId);
-    match.state = structuredClone({ ...currentState(),
+    const nextState = structuredClone({ ...currentState(),
         cursors: { ...cursors, pendingVoter: null, editingPlayerIndex: null },
-        memoText: memoTextarea.value, resultText: exportResultInput.value, rolesText: exportRolesInput.value,
+        memoText: memoTextarea.value, resultText: match.state.resultText, rolesText: match.state.rolesText,
     });
-    match.updatedAt = new Date().toISOString();
+    if (JSON.stringify(match.state) !== JSON.stringify(nextState)) {
+        match.state = nextState;
+        match.updatedAt = new Date().toISOString();
+    }
+    if (!archiveWritable) return false;
     try {
-        localStorage.setItem(MATCHES_STORAGE_KEY, JSON.stringify(matchArchive));
+        if (!archiveStorage) throw new Error("保存できません。");
+        archiveStorage.save(JSON.stringify(matchArchive));
         saveStatus.textContent = "";
         saveStatus.classList.remove("save-error");
         return true;
-    } catch {
+    } catch (error) {
+        if (error instanceof StorageConflictError) {
+            lockStaleTab();
+            return false;
+        }
         saveStatus.textContent = "保存できません。空き容量やブラウザの保存設定を確認してください。";
         saveStatus.classList.add("save-error");
         return false;
@@ -1738,6 +1878,7 @@ function openMatch(id) {
     restoreState(match.state);
     reconcileDeathRecords(currentState());
     memoTextarea.value = match.state.memoText;
+    exportEditingMatchId = id;
     exportResultInput.value = match.state.resultText;
     exportRolesInput.value = match.state.rolesText;
     playerForm.reset();
@@ -1764,9 +1905,32 @@ function openMatch(id) {
     }
 }
 
+function lockStaleTab() {
+    clearTimeout(saveTimer);
+    storageConflict = true;
+    archiveWritable = false;
+    voteDrag?.cancel();
+    document.querySelector(".main-layout").inert = true;
+    matchSelect.disabled = true;
+    newMatchBtn.disabled = true;
+    resetMatchBtn.disabled = true;
+    exportResultInput.disabled = true;
+    exportRolesInput.disabled = true;
+    saveStatus.textContent = "別のタブで記録が更新されました。再読み込みしてください。";
+    saveStatus.classList.add("save-error");
+    reloadMatchesBtn.hidden = false;
+    if (activeModal === exportModalEl && !exportBusy) {
+        exportStatus.textContent = "別のタブで記録が更新されました。閉じて再読み込みしてください。";
+        exportStatus.classList.add("export-error");
+    }
+}
+
 function initializeMatches() {
     let raw = null;
-    try { raw = localStorage.getItem(MATCHES_STORAGE_KEY); } catch { /* Saving reports storage errors below. */ }
+    try {
+        raw = localStorage.getItem(MATCHES_STORAGE_KEY);
+        archiveStorage = new ArchiveStorage(localStorage, MATCHES_STORAGE_KEY, raw);
+    } catch { /* Saving reports storage errors below. */ }
     try {
         matchArchive = parseArchive(raw);
     } catch {
@@ -1777,19 +1941,58 @@ function initializeMatches() {
         saveStatus.classList.add("save-error");
         newMatchBtn.disabled = true;
     }
+    exportFolderInput.value = typeof matchArchive.exportSettings?.folderName === "string" ? matchArchive.exportSettings.folderName : "";
+    exportGMInput.value = typeof matchArchive.exportSettings?.gmName === "string" ? matchArchive.exportSettings.gmName : "";
     openMatch(matchArchive.activeMatchId);
     if (archiveWritable) saveCurrentMatch();
+    exportMatchSelect.addEventListener("change", () => {
+        saveCurrentMatch();
+        loadExportMatch(exportMatchSelect.value);
+    });
+    exportScopeInput.addEventListener("change", updateExportScope);
+    exportFolderInput.addEventListener("input", updateExportPreview);
+    reloadMatchesBtn.addEventListener("click", () => window.location.reload());
+    window.addEventListener("storage", (event) => {
+        if (event.key !== MATCHES_STORAGE_KEY && event.key !== null) return;
+        try {
+            if (archiveStorage && !archiveStorage.isCurrent()) {
+                saveCurrentMatch();
+                lockStaleTab();
+            }
+        } catch { /* The next save reports storage availability errors. */ }
+    });
     matchSelect.addEventListener("change", () => {
         const nextId = matchSelect.value;
         saveCurrentMatch();
+        if (storageConflict) return;
         openMatch(nextId);
         saveCurrentMatch();
     });
     newMatchBtn.addEventListener("click", () => {
         saveCurrentMatch();
+        if (storageConflict) return;
         const next = createMatch(matchArchive.matches.length + 1, players);
         matchArchive.matches.push(next);
         openMatch(next.id);
+        saveCurrentMatch();
+    });
+    resetMatchBtn.addEventListener("click", () => {
+        if (storageConflict) return;
+        const confirmed = window.confirm(
+            "すべての試合履歴を削除しますか？\nこの操作は元に戻せません。"
+        );
+        if (!confirmed) return;
+        if (archiveStorage && !archiveStorage.isCurrent()) {
+            lockStaleTab();
+            return;
+        }
+        clearTimeout(saveTimer);
+        matchArchive = createArchive();
+        exportFolderInput.value = "";
+        exportGMInput.value = "";
+        archiveWritable = true;
+        newMatchBtn.disabled = false;
+        openMatch(matchArchive.activeMatchId);
         saveCurrentMatch();
     });
     // Run after each interaction's handlers; pointer movement is saved on release.
@@ -1853,545 +2056,4 @@ function getStoredTheme() {
     } catch {
         return null;
     }
-}
-
-function exportMatchSummary({ resultText, rolesText }) {
-    const exportedAt = formatExportTimestamp(new Date());
-    const data = buildSummaryData({ resultText, rolesText, exportedAt });
-    const pages = renderSummaryPages(data);
-    const pdfContent = assemblePdfFromImages(pages);
-    triggerPdfDownload(pdfContent);
-}
-
-function buildSummaryData({ resultText, rolesText, exportedAt }) {
-    const memoText = (memoTextarea?.value || "").trim();
-
-    const coHeaders = ["役職", ...days];
-    const coRows = roleRows.map((role) => {
-        const assignment = supportsAssignment(role.label) && roleAssignments[role.id]
-            ? playerName(roleAssignments[role.id])
-            : "";
-        const rows = days.map((day) => {
-            const id = coSelections[getKey(role.id, day)];
-            const value = id ? playerName(id) : "-";
-            const marker = getMarkerSymbol(role.id, day, value);
-            if (!marker) {
-                return value;
-            }
-
-            if (!value || value === "-") {
-                return marker;
-            }
-
-            return `${value} ${marker}`;
-        });
-        const label = assignment ? `${role.label}\n${assignment}` : role.label;
-        return [label, ...rows];
-    });
-
-    const voteDays = getVotingDays().map((day) => {
-        const entries = Object.entries(votingData[day] || {});
-        if (entries.length === 0) {
-            return { day, rows: [] };
-        }
-        const counts = computeTargetCounts(entries);
-        const rows = entries.map(([voter, target]) => {
-            const count = counts[target] || 1;
-            const orderText = count > 1 ? `${getVoteOrder(entries, target, voter)}票目 / ${count}票` : "1票目";
-            return [playerName(voter), playerName(target), orderText];
-        });
-        return { day, rows };
-    });
-
-    return {
-        coTable: { headers: coHeaders, rows: coRows },
-        votes: voteDays,
-        memoText: memoText || "メモは記録されていません。",
-        resultText: (resultText || "").trim() || "未入力",
-        rolesText: (rolesText || "").trim() || "未入力",
-        exportedAt: exportedAt || formatExportTimestamp(new Date())
-    };
-}
-
-function getMarkerSymbol(roleId, day, value) {
-    const key = `${roleId}-${day}`;
-    const marker = markerSelections[key];
-    if (marker === "black") {
-        return "●";
-    }
-
-    if (marker === "white") {
-        return "○";
-    }
-
-    if (value && value !== "-") {
-        return "○";
-    }
-
-    return "";
-}
-
-function triggerPdfDownload(pdfContent) {
-    const blob = pdfContent instanceof Blob ? pdfContent : new Blob([pdfContent], { type: "application/pdf" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-    link.href = url;
-    link.download = `jinro-summary-${timestamp}.pdf`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-}
-
-function renderSummaryPages(data) {
-    const canvasWidth = 1240;
-    const canvasHeight = 1754;
-    const marginX = 80;
-    const marginTop = 80;
-    const marginBottom = 80;
-    const contentWidth = canvasWidth - marginX * 2;
-    const fonts = {
-        reportTitle: '600 48px "Noto Sans JP", "Yu Gothic", sans-serif',
-        sectionTitle: '600 34px "Noto Sans JP", "Yu Gothic", sans-serif',
-        subheading: '600 28px "Noto Sans JP", "Yu Gothic", sans-serif',
-        tableHeader: '600 24px "Noto Sans JP", "Yu Gothic", sans-serif',
-        tableCell: '400 22px "Noto Sans JP", "Yu Gothic", sans-serif',
-        paragraph: '400 24px "Noto Sans JP", "Yu Gothic", sans-serif',
-        memo: '400 26px "Noto Sans JP", "Yu Gothic", sans-serif',
-        caption: '400 22px "Noto Sans JP", "Yu Gothic", sans-serif'
-    };
-    const lineHeights = {
-        tableHeader: 30,
-        tableCell: 30,
-        paragraph: 34,
-        memo: 36
-    };
-    const cellPadding = 12;
-    const pages = [];
-
-    let { canvas, ctx } = createSummaryCanvas(canvasWidth, canvasHeight);
-    let currentY = marginTop;
-
-    const availableHeight = () => canvasHeight - marginBottom - currentY;
-    const commitPage = () => {
-        pages.push(convertCanvasToPage(canvas));
-        ({ canvas, ctx } = createSummaryCanvas(canvasWidth, canvasHeight));
-        currentY = marginTop;
-    };
-
-    const ensureSpace = (height) => {
-        if (height <= availableHeight()) {
-            return;
-        }
-        commitPage();
-    };
-
-    const drawReportHeader = () => {
-        ensureSpace(80);
-        ctx.font = fonts.reportTitle;
-        ctx.fillStyle = "#0f172a";
-        const titleBase = data.exportedAt ? `試合まとめ: ${data.exportedAt}` : "試合まとめ";
-        const resultLabel = data.resultText ? `（結果: ${data.resultText}）` : "";
-        ctx.fillText(`${titleBase} ${resultLabel}`.trim(), marginX, currentY);
-        currentY += 64;
-        ctx.fillStyle = "#1f2937";
-    };
-
-    const drawSectionTitle = (text) => {
-        ensureSpace(60);
-        ctx.font = fonts.sectionTitle;
-        ctx.fillStyle = "#0f172a";
-        ctx.fillText(text, marginX, currentY);
-        currentY += 46;
-        drawDivider();
-    };
-
-    const drawDivider = () => {
-        ctx.strokeStyle = "#cbd5f5";
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.moveTo(marginX, currentY);
-        ctx.lineTo(canvasWidth - marginX, currentY);
-        ctx.stroke();
-        currentY += 12;
-        ctx.fillStyle = "#1f2937";
-    };
-
-    const wrapLines = (text, width, font, lineHeightValue) => {
-        ctx.save();
-        ctx.font = font;
-        const chars = Array.from(text || "");
-        const lines = [];
-        let current = "";
-        chars.forEach((char) => {
-            const test = current + char;
-            if (ctx.measureText(test).width <= width) {
-                current = test;
-            } else if (current) {
-                lines.push(current);
-                current = char;
-            } else {
-                lines.push(char);
-                current = "";
-            }
-        });
-        if (current) {
-            lines.push(current);
-        }
-        ctx.restore();
-        if (lines.length === 0) {
-            lines.push("");
-        }
-        return {
-            lines,
-            height: lines.length * lineHeightValue
-        };
-    };
-
-    const wrapWithLineBreaks = (text, width, font, lineHeightValue) => {
-        const segments = (text ?? "").split(/\r?\n/);
-        const collected = [];
-        segments.forEach((segment, index) => {
-            const layout = wrapLines(segment, width, font, lineHeightValue);
-            collected.push(...layout.lines);
-            if (index !== segments.length - 1) {
-                collected.push("");
-            }
-        });
-        if (collected.length === 0) {
-            collected.push("");
-        }
-        return {
-            lines: collected,
-            height: collected.length * lineHeightValue
-        };
-    };
-
-    const drawTable = (table) => {
-        if (!table.rows.length) {
-            drawParagraph("データがありません。");
-            return;
-        }
-
-        const columnWidths = computeColumnWidths(table.headers.length, contentWidth);
-        const headerLayout = table.headers.map((text, index) =>
-            wrapLines(text, columnWidths[index] - cellPadding * 2, fonts.tableHeader, lineHeights.tableHeader)
-        );
-        const headerHeight = getRowHeight(headerLayout, lineHeights.tableHeader, cellPadding);
-
-        const drawHeaderRow = () => {
-            ensureSpace(headerHeight);
-            drawRow(table.headers, headerLayout, columnWidths, {
-                font: fonts.tableHeader,
-                lineHeight: lineHeights.tableHeader,
-                fill: "#f1f5f9",
-                bold: true
-            });
-        };
-
-        drawHeaderRow();
-
-        table.rows.forEach((row) => {
-            const layouts = row.map((text, index) =>
-                wrapLines(text || "", columnWidths[index] - cellPadding * 2, fonts.tableCell, lineHeights.tableCell)
-            );
-            const rowHeight = getRowHeight(layouts, lineHeights.tableCell, cellPadding);
-            if (rowHeight > availableHeight()) {
-                commitPage();
-                drawHeaderRow();
-            }
-            ensureSpace(rowHeight);
-            drawRow(row, layouts, columnWidths, {
-                font: fonts.tableCell,
-                lineHeight: lineHeights.tableCell
-            });
-        });
-
-        currentY += 24;
-    };
-
-    const drawRow = (cells, layouts, widths, options) => {
-        const rowHeight = getRowHeight(layouts, options.lineHeight, cellPadding);
-        let x = marginX;
-        ctx.strokeStyle = "#cbd5f5";
-        ctx.lineWidth = 1;
-        ctx.font = options.font;
-        ctx.fillStyle = "#0f172a";
-        cells.forEach((cell, index) => {
-            const width = widths[index];
-            ctx.fillStyle = options.fill || "#ffffff";
-            ctx.fillRect(x, currentY, width, rowHeight);
-            ctx.strokeRect(x, currentY, width, rowHeight);
-            ctx.fillStyle = "#0f172a";
-            ctx.font = options.font;
-            const lines = layouts[index].lines;
-            let textY = currentY + cellPadding;
-            lines.forEach((line) => {
-                ctx.fillText(line, x + cellPadding, textY);
-                textY += options.lineHeight;
-            });
-            x += width;
-        });
-        currentY += rowHeight;
-    };
-
-    const drawParagraph = (text, indent = 0) => {
-        const maxWidth = contentWidth - indent;
-        const layout = wrapLines(text, maxWidth, fonts.paragraph, lineHeights.paragraph);
-        const blockHeight = layout.height;
-        ensureSpace(blockHeight);
-        ctx.font = fonts.paragraph;
-        ctx.fillStyle = "#1f2937";
-        let textY = currentY;
-        layout.lines.forEach((line) => {
-            ctx.fillText(line, marginX + indent, textY);
-            textY += lineHeights.paragraph;
-        });
-        currentY += blockHeight + 20;
-    };
-
-    const drawMemoBlock = (text) => {
-        const layout = wrapWithLineBreaks(text, contentWidth - cellPadding * 2, fonts.memo, lineHeights.memo);
-        const boxHeight = layout.height + cellPadding * 2;
-        ensureSpace(boxHeight);
-        ctx.fillStyle = "#eef2ff";
-        ctx.fillRect(marginX, currentY, contentWidth, boxHeight);
-        ctx.fillStyle = "#0f172a";
-        ctx.font = fonts.memo;
-        let textY = currentY + cellPadding;
-        layout.lines.forEach((line) => {
-            ctx.fillText(line, marginX + cellPadding, textY);
-            textY += lineHeights.memo;
-        });
-        currentY += boxHeight + 24;
-    };
-
-    const drawVoteSections = (votes) => {
-        if (!votes.length) {
-            drawParagraph("投票情報がありません。");
-            return;
-        }
-
-        votes.forEach((entry) => {
-            ensureSpace(50);
-            ctx.font = fonts.subheading;
-            ctx.fillStyle = "#0f172a";
-            ctx.fillText(entry.day, marginX, currentY);
-            currentY += 38;
-            if (entry.rows.length === 0) {
-                drawParagraph("投票なし", 20);
-                return;
-            }
-            const table = {
-                headers: ["投票者", "投票先", "票順"],
-                rows: entry.rows
-            };
-            drawTable(table);
-        });
-    };
-
-    const drawResultSection = (result, roles) => {
-        const blocks = [
-            { label: "試合結果", value: result },
-            { label: "正解の配役", value: roles }
-        ];
-        blocks.forEach((block) => {
-            const layout = wrapWithLineBreaks(block.value, contentWidth - cellPadding * 2, fonts.paragraph, lineHeights.paragraph);
-            const boxHeight = layout.height + cellPadding * 2 + 34;
-            ensureSpace(boxHeight);
-            ctx.fillStyle = "#f8fafc";
-            ctx.fillRect(marginX, currentY, contentWidth, boxHeight);
-            ctx.strokeStyle = "#cbd5f5";
-            ctx.strokeRect(marginX, currentY, contentWidth, boxHeight);
-            ctx.fillStyle = "#0f172a";
-            ctx.font = fonts.subheading;
-            ctx.fillText(block.label, marginX + cellPadding, currentY + cellPadding);
-            ctx.font = fonts.paragraph;
-            let textY = currentY + cellPadding + 30;
-            layout.lines.forEach((line) => {
-                ctx.fillText(line, marginX + cellPadding, textY);
-                textY += lineHeights.paragraph;
-            });
-            currentY += boxHeight + 20;
-        });
-    };
-
-    drawReportHeader();
-    drawSectionTitle("CO表");
-    drawTable(data.coTable);
-    drawSectionTitle("メモ");
-    drawMemoBlock(data.memoText);
-    drawSectionTitle("投票状況");
-    drawVoteSections(data.votes);
-    drawSectionTitle("配役 / 試合結果");
-    drawResultSection(data.resultText, data.rolesText);
-
-    pages.push(convertCanvasToPage(canvas));
-    return pages;
-}
-
-function formatExportTimestamp(date) {
-    if (!(date instanceof Date) || Number.isNaN(date.getTime())) {
-        return "";
-    }
-    const pad = (value) => String(value).padStart(2, "0");
-    const year = date.getFullYear();
-    const month = pad(date.getMonth() + 1);
-    const day = pad(date.getDate());
-    return `${year}-${month}-${day}`;
-}
-
-function computeColumnWidths(count, totalWidth) {
-    if (count <= 0) {
-        return [];
-    }
-    if (count === 1) {
-        return [totalWidth];
-    }
-    const first = Math.min(260, totalWidth * 0.3);
-    const remaining = Math.max(totalWidth - first, 200);
-    const others = (remaining) / (count - 1);
-    const widths = [];
-    for (let i = 0; i < count; i += 1) {
-        widths.push(i === 0 ? first : others);
-    }
-    return widths;
-}
-
-function getRowHeight(layouts, lineHeight, padding) {
-    if (!layouts.length) {
-        return lineHeight + padding * 2;
-    }
-    const heights = layouts.map((layout) => layout.height + padding * 2);
-    return Math.max(...heights);
-}
-
-function createSummaryCanvas(width, height) {
-    const canvas = document.createElement("canvas");
-    canvas.width = width;
-    canvas.height = height;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) {
-        throw new Error("2D コンテキストを初期化できません");
-    }
-
-    ctx.fillStyle = "#ffffff";
-    ctx.fillRect(0, 0, width, height);
-    ctx.fillStyle = "#0f172a";
-    ctx.font = '400 24px "Noto Sans JP", "Yu Gothic", sans-serif';
-    ctx.textBaseline = "top";
-
-    return { canvas, ctx };
-}
-
-function convertCanvasToPage(canvas) {
-    const dataUrl = canvas.toDataURL("image/jpeg", 0.92);
-    return {
-        width: canvas.width,
-        height: canvas.height,
-        data: dataUrlToUint8Array(dataUrl)
-    };
-}
-
-function dataUrlToUint8Array(dataUrl) {
-    const base64 = dataUrl.split(",")[1];
-    const binary = window.atob(base64);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i += 1) {
-        bytes[i] = binary.charCodeAt(i);
-    }
-    return bytes;
-}
-
-function assemblePdfFromImages(pages) {
-    const encoder = new TextEncoder();
-    const pdfChunks = [];
-    let position = 0;
-    const pushChunk = (chunk) => {
-        pdfChunks.push(chunk);
-        position += chunk.length;
-    };
-
-    const header = encoder.encode("%PDF-1.4\n");
-    pushChunk(header);
-    const xrefEntries = ["0000000000 65535 f \n"];
-
-    const pageCount = pages.length || 1;
-    const totalObjects = 2 + pageCount * 3;
-    const pageObjectIds = [];
-    const contentObjectIds = [];
-    const imageObjectIds = [];
-
-    let nextId = 3;
-    for (let i = 0; i < pageCount; i += 1) {
-        pageObjectIds.push(nextId);
-        contentObjectIds.push(nextId + 1);
-        imageObjectIds.push(nextId + 2);
-        nextId += 3;
-    }
-
-    const objectMap = new Map();
-    objectMap.set(1, [`<< /Type /Catalog /Pages 2 0 R >>`]);
-    const kids = pageObjectIds.map((id) => `${id} 0 R`).join(" ");
-    objectMap.set(2, [`<< /Type /Pages /Count ${pageCount} /Kids [${kids}] >>`]);
-
-    pages.forEach((page, index) => {
-        const pageId = pageObjectIds[index];
-        const contentId = contentObjectIds[index];
-        const imageId = imageObjectIds[index];
-        const imageName = `/Im${index}`;
-
-        objectMap.set(
-            pageId,
-            [`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /XObject << ${imageName} ${imageId} 0 R >> >> /Contents ${contentId} 0 R >>`]
-        );
-
-        const contentStream = `q 595 0 0 842 0 0 cm ${imageName} Do Q`;
-        objectMap.set(
-            contentId,
-            [`<< /Length ${contentStream.length} >>\nstream\n${contentStream}\nendstream`]
-        );
-
-        objectMap.set(
-            imageId,
-            [
-                `<< /Type /XObject /Subtype /Image /Width ${page.width} /Height ${page.height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${page.data.length} >>\nstream\n`,
-                page.data,
-                "\nendstream"
-            ]
-        );
-    });
-
-    for (let i = 1; i <= totalObjects; i += 1) {
-        const parts = objectMap.get(i) || [""];
-        const offsetEntry = `${position.toString().padStart(10, "0")} 00000 n \n`;
-        xrefEntries.push(offsetEntry);
-        pushChunk(encoder.encode(`${i} 0 obj\n`));
-        parts.forEach((part) => {
-            if (typeof part === "string") {
-                pushChunk(encoder.encode(part));
-            } else {
-                pushChunk(part);
-            }
-        });
-        pushChunk(encoder.encode("\nendobj\n"));
-    }
-
-    const xrefStart = position;
-    pushChunk(encoder.encode(`xref\n0 ${totalObjects + 1}\n`));
-    xrefEntries.forEach((entry) => {
-        pushChunk(encoder.encode(entry));
-    });
-    pushChunk(encoder.encode(`trailer\n<< /Size ${totalObjects + 1} /Root 1 0 R >>\nstartxref\n${xrefStart}\n%%EOF`));
-
-    const totalLength = pdfChunks.reduce((sum, chunk) => sum + chunk.length, 0);
-    const merged = new Uint8Array(totalLength);
-    let offset = 0;
-    pdfChunks.forEach((chunk) => {
-        merged.set(chunk, offset);
-        offset += chunk.length;
-    });
-
-    return merged;
 }

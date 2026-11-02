@@ -4,7 +4,7 @@
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>人狼パワーツール</title>
-        <link rel="stylesheet" href="styles.css?v=20261101-4">
+        <link rel="stylesheet" href="styles.css?v=20261103-3">
         <link rel="icon" href="images/okami_halloween_gray.png" type="image/png">
     </head>
 <body>
@@ -27,16 +27,12 @@
                 <img src="images/moon_yellow.png" alt="" class="brand-icon brand-icon-dark" aria-hidden="true">
             </div>
             <div class="toolbar-actions">
-                <img
-                    src="images/download_icon.png"
-                    alt="試合まとめをダウンロード"
-                    id="openExportModalBtn"
-                    class="toolbar-icon download-icon"
-                    role="button"
-                    tabindex="0"
-                    loading="lazy"
-                    decoding="async"
-                >
+                <button type="button" id="openExportModalBtn" class="export-btn" aria-haspopup="dialog" aria-controls="exportModal">
+                    <svg class="export-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M12 3v12m-4-4 4 4 4-4M4 16v4h16v-4"></path>
+                    </svg>
+                    <span>エクスポート</span>
+                </button>
                 <button type="button" id="themeToggle" class="theme-toggle" aria-pressed="false" aria-label="ダークモードに切り替え">
                     <span class="visually-hidden">テーマ切り替え</span>
                     <img src="images/moon_icon_2.png" alt="" class="theme-icon theme-icon-dark" width="28" height="28" loading="lazy" decoding="async">
@@ -48,7 +44,9 @@
             <label for="matchSelect">試合</label>
             <select id="matchSelect" aria-label="表示する試合"></select>
             <button type="button" id="newMatchBtn">記録して次の試合へ</button>
+            <button type="button" id="resetMatchBtn">リセット</button>
             <span id="saveStatus" role="status" aria-live="polite"></span>
+            <button type="button" id="reloadMatchesBtn" hidden>再読み込み</button>
         </section>
         <main class="main-layout">
             <section class="panel players-panel">
@@ -118,9 +116,9 @@
         </div>
     </div>
     <div class="modal-overlay" id="bulkModal" aria-hidden="true">
-        <div class="modal">
+        <div class="modal" role="dialog" aria-modal="true" aria-labelledby="bulkTitle">
             <div class="modal-header">
-                <h3>テキストから登録</h3>
+                <h3 id="bulkTitle">テキストから登録</h3>
                 <button type="button" class="modal-close" id="bulkModalClose" aria-label="閉じる">×</button>
             </div>
             <p class="modal-description">カンマや改行区切りで複数の名前を貼り付けてください。</p>
@@ -132,22 +130,41 @@
         </div>
     </div>
     <div class="modal-overlay" id="exportModal" aria-hidden="true">
-        <div class="modal">
+        <div class="modal export-modal" role="dialog" aria-modal="true" aria-labelledby="exportTitle">
             <div class="modal-header">
-                <h3>試合まとめをダウンロード</h3>
+                <h3 id="exportTitle">試合まとめをエクスポート</h3>
                 <button type="button" class="modal-close" id="exportModalClose" aria-label="閉じる">×</button>
             </div>
-            <p class="modal-description">試合結果と正解の配役を入力してください。</p>
-            <label class="modal-field-label" for="exportResultInput">試合結果</label>
-            <textarea id="exportResultInput" class="modal-textarea" rows="3" placeholder="例：村人勝ち / 狼負け"></textarea>
-            <label class="modal-field-label" for="exportRolesInput">正解の配役</label>
-            <textarea id="exportRolesInput" class="modal-textarea" rows="4" placeholder="例: 狼: 太郎, 花子&#10;占い: 山田"></textarea>
+            <fieldset class="export-fields">
+                <legend>共通設定</legend>
+                <label class="modal-field-label" for="exportFolderInput">村名（フォルダ名）</label>
+                <input id="exportFolderInput" class="modal-textarea" type="text" maxlength="100" placeholder="例：月夜の村">
+                <label class="modal-field-label" for="exportGMInput">GM名（任意）</label>
+                <input id="exportGMInput" class="modal-textarea" type="text" maxlength="120">
+                <label class="modal-field-label" for="exportScopeInput">出力形式</label>
+                <select id="exportScopeInput" class="modal-textarea">
+                    <option value="all">全試合（ZIP）</option>
+                    <option value="single">選択した試合（PDF）</option>
+                </select>
+                <label class="modal-field-label" for="exportFilenamePreview">出力ファイル</label>
+                <output id="exportFilenamePreview" class="export-file-preview"></output>
+            </fieldset>
+            <fieldset class="export-fields">
+                <legend>試合ごとの結果・配役</legend>
+                <label class="modal-field-label" for="exportMatchSelect">編集する試合</label>
+                <select id="exportMatchSelect" class="modal-textarea"></select>
+                <label class="modal-field-label" for="exportResultInput">試合結果</label>
+                <textarea id="exportResultInput" class="modal-textarea" rows="2" placeholder="例：村人勝ち / 狼負け"></textarea>
+                <label class="modal-field-label" for="exportRolesInput">正解の配役</label>
+                <textarea id="exportRolesInput" class="modal-textarea" rows="3" placeholder="例: 狼: 太郎, 花子&#10;占い: 山田"></textarea>
+            </fieldset>
+            <p id="exportStatus" class="export-note" role="status" aria-live="polite"></p>
             <div class="modal-actions">
-                <button type="button" id="exportCancelBtn">キャンセル</button>
-                <button type="button" id="exportSubmitBtn" class="primary">エクスポート開始</button>
+                <button type="button" id="exportCancelBtn">閉じる</button>
+                <button type="button" id="exportSubmitBtn" class="primary">ZIPをダウンロード</button>
             </div>
         </div>
     </div>
-    <script type="module" src="main.js?v=20261101-4"></script>
+    <script type="module" src="main.js?v=20261103-3"></script>
 </body>
 </html>
